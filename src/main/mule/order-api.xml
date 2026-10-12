@@ -1,0 +1,407 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd ">
+    <http:listener-config name="order-api-httpListenerConfig">
+        <http:listener-connection host="0.0.0.0" port="8081" />
+    </http:listener-config>
+    <apikit:config name="order-api-config" api="order-api.raml" outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus" />
+
+    <error-handler name="Global_Error_Handler">
+
+        <on-error-propagate type="APIKIT:BAD_REQUEST" enableNotifications="false" logException="false">
+            <logger level="WARN" doc:name="Log Bad Request" message='#[output application/java --- "API ERROR corr=$(correlationId) code=BAD_REQUEST: " ++ (error.description default "unknown")]' />
+            <ee:transform doc:name="Build 400 response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "BAD_REQUEST",
+  message: "The request is not valid"
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="APIKIT:NOT_FOUND" enableNotifications="false" logException="false">
+            <logger level="WARN" doc:name="Log Not Found" message='#["API ERROR corr=$(correlationId) code=NOT_FOUND"]' />
+            <ee:transform doc:name="Build 404 response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "NOT_FOUND",
+  message: "Resource not found"
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED" enableNotifications="false" logException="false">
+            <logger level="WARN" doc:name="Log Method Not Allowed" message='#["API ERROR corr=$(correlationId) code=METHOD_NOT_ALLOWED"]' />
+            <ee:transform doc:name="Build 405 response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "METHOD_NOT_ALLOWED",
+  message: "Method not allowed"
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">405</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="APIKIT:NOT_ACCEPTABLE" enableNotifications="false" logException="false">
+            <logger level="WARN" doc:name="Log Not Acceptable" message='#["API ERROR corr=$(correlationId) code=NOT_ACCEPTABLE"]' />
+            <ee:transform doc:name="Build 406 response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "NOT_ACCEPTABLE",
+  message: "Not acceptable"
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">406</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="APIKIT:UNSUPPORTED_MEDIA_TYPE" enableNotifications="false" logException="false">
+            <logger level="WARN" doc:name="Log Unsupported Media Type" message='#["API ERROR corr=$(correlationId) code=UNSUPPORTED_MEDIA_TYPE"]' />
+            <ee:transform doc:name="Build 415 response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "UNSUPPORTED_MEDIA_TYPE",
+  message: "Unsupported media type"
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">415</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="APIKIT:NOT_IMPLEMENTED" enableNotifications="false" logException="false">
+            <logger level="WARN" doc:name="Log Not Implemented" message='#["API ERROR corr=$(correlationId) code=NOT_IMPLEMENTED"]' />
+            <ee:transform doc:name="Build 501 response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "NOT_IMPLEMENTED",
+  message: "Not implemented"
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">501</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+        <on-error-propagate type="ANY" enableNotifications="false" logException="false">
+            <logger level="ERROR" doc:name="Log API Error" message='#[output application/java --- "API ERROR corr=$(correlationId) code=INTERNAL_ERROR type=$(error.errorType.identifier default "UNKNOWN"): " ++ (error.description default "unknown")]' />
+            <ee:transform doc:name="Build 500 response">
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "INTERNAL_ERROR",
+  message: "Unexpected error"
+}]]></ee:set-payload>
+                </ee:message>
+                <ee:variables>
+                    <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+        </on-error-propagate>
+
+    </error-handler>
+
+    <flow name="order-api-main">
+        <http:listener config-ref="order-api-httpListenerConfig" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="order-api-config" />
+        <error-handler ref="Global_Error_Handler" />
+    </flow>
+    <flow name="order-api-console">
+        <http:listener config-ref="order-api-httpListenerConfig" path="/console/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:console config-ref="order-api-config" />
+        <error-handler>
+            <on-error-propagate type="APIKIT:NOT_FOUND">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Resource not found"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <!-- UNCHANGED: GET /orders/{orderNumber} (tested, working) -->
+    <flow name="get:\orders\(orderNumber):order-api-config">
+        <ee:transform doc:name="Transform Message">
+            <ee:variables>
+                <ee:set-variable variableName="orderNumber">attributes.uriParams.'orderNumber'</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <logger level="INFO" doc:name="Log Get Order" message='#[output application/java --- "GET ORDER corr=$(correlationId) order=$(vars.orderNumber): request received"]' />
+        <db:select doc:name="Select order header" config-ref="Database_Config" target="orderHeader">
+            <db:sql><![CDATA[SELECT order_number, opportunity_id, account_name, currency, total_amount, line_count, order_status, file_name, sf_update_status, email_status, correlation_id
+                FROM sales_order
+                WHERE order_number = :orderNumber]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+        </db:select>
+        <choice doc:name="Order found?">
+            <when expression="#[isEmpty(vars.orderHeader)]">
+                <logger level="WARN" doc:name="Log Order Not Found" message='#[output application/java --- "GET ORDER corr=$(correlationId) order=$(vars.orderNumber): not found"]' />
+                <ee:transform doc:name="Build 404 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "NOT_FOUND",
+  message: "No order found"
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <otherwise>
+                <db:select doc:name="Select order lines" config-ref="Database_Config" target="orderLines">
+                    <db:sql><![CDATA[SELECT line_number, product_code, product_name, quantity, unit_price, line_total
+                        FROM sales_order_line
+                        WHERE order_number = :orderNumber
+                        ORDER BY line_number]]></db:sql>
+                    <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+                </db:select>
+                <ee:transform doc:name="Build order response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var h = vars.orderHeader[0]
+---
+{
+  orderNumber: h.order_number,
+  opportunityId: h.opportunity_id,
+  accountName: h.account_name,
+  currency: h.currency,
+  totalAmount: h.total_amount as Number,
+  lineCount: h.line_count as Number,
+  orderStatus: h.order_status,
+  fileName: h.file_name,
+  sfUpdateStatus: h.sf_update_status,
+  emailStatus: h.email_status,
+  correlationId: h.correlation_id,
+  lines: vars.orderLines map (l) -> {
+    lineNumber: l.line_number as Number,
+    productCode: l.product_code,
+    productName: l.product_name,
+    quantity: l.quantity as Number,
+    unitPrice: l.unit_price as Number,
+    lineTotal: l.line_total as Number
+  }
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+                <logger level="INFO" doc:name="Log Order Returned" message='#[output application/java --- "GET ORDER corr=$(correlationId) opp=$(vars.orderHeader[0].opportunity_id) order=$(vars.orderNumber): returned status $(vars.orderHeader[0].order_status)"]' />
+            </otherwise>
+        </choice>
+    </flow>
+
+    <!-- CHANGED: POST /orders/replay now does the real work -->
+    <flow name="post:\orders\replay:application\json:order-api-config">
+        <ee:transform doc:name="Read request">
+            <ee:message />
+            <ee:variables>
+                <ee:set-variable variableName="oppId">payload.opportunityId</ee:set-variable>
+                <ee:set-variable variableName="force">payload.force default false</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <logger level="INFO" doc:name="Log Replay Request" message='#[output application/java --- "REPLAY corr=$(correlationId) opp=$(vars.oppId): request received, force=$(vars.force)"]' />
+        <salesforce:query doc:name="Query opportunity" config-ref="Salesforce_Config" target="oppResult">
+            <salesforce:salesforce-query><![CDATA[SELECT Id, AccountId, OwnerId, Amount, CloseDate, StageName, Integration_Status__c, LastModifiedDate FROM Opportunity WHERE Id = ':oppId']]></salesforce:salesforce-query>
+            <salesforce:parameters><![CDATA[#[{ oppId: vars.oppId }]]]></salesforce:parameters>
+        </salesforce:query>
+        <choice doc:name="Replay checks">
+            <when expression="#[isEmpty(vars.oppResult)]">
+                <logger level="WARN" doc:name="Log Opp Not Found" message='#[output application/java --- "REPLAY corr=$(correlationId) opp=$(vars.oppId): opportunity not found in Salesforce"]' />
+                <ee:transform doc:name="Build 404 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "NOT_FOUND",
+  message: "Opportunity not found in Salesforce"
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <when expression="#[vars.oppResult[0].StageName != 'Closed Won']">
+                <logger level="WARN" doc:name="Log Not Closed Won" message='#[output application/java --- "REPLAY corr=$(correlationId) opp=$(vars.oppId): stage is not Closed Won, nothing re-published"]' />
+                <ee:transform doc:name="Build 400 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  errorCode: "NOT_CLOSED_WON",
+  message: "Only Closed Won opportunities can be replayed"
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <when expression="#[vars.oppResult[0].Integration_Status__c == 'PROCESSED' and not vars.force]">
+                <logger level="WARN" doc:name="Log Already Processed" message='#[output application/java --- "REPLAY corr=$(correlationId) opp=$(vars.oppId): already PROCESSED, nothing re-published"]' />
+                <ee:transform doc:name="Build skipped response (processed)">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  opportunityId: vars.oppResult[0].Id,
+  result: "SKIPPED_DUPLICATE",
+  message: "Opportunity is already PROCESSED, nothing re-published (send force=true to override)"
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">200</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <otherwise>
+                <ee:transform doc:name="Build duplicate key">
+                    <ee:message />
+                    <ee:variables>
+                        <ee:set-variable variableName="idemKey"><![CDATA[%dw 2.0
+output application/java
+---
+vars.oppResult[0].Id ++ "|" ++ (((vars.oppResult[0].LastModifiedDate as DateTime) >> "UTC") as String {format: "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"})]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+                <set-variable variableName="duplicate" value="#[false]" doc:name="Duplicate = false" />
+                <choice doc:name="Force flag?">
+                    <when expression="#[not vars.force]">
+                        <try doc:name="Duplicate check">
+                            <idempotent-message-validator doc:name="Duplicate check" idExpression="#[vars.idemKey]" objectStore="Idempotent_Store" />
+                            <error-handler>
+                                <on-error-continue type="MULE:DUPLICATE_MESSAGE" enableNotifications="false" logException="false">
+                                    <set-variable variableName="duplicate" value="#[true]" doc:name="Duplicate = true" />
+                                </on-error-continue>
+                            </error-handler>
+                        </try>
+                    </when>
+                </choice>
+                <choice doc:name="Duplicate?">
+                    <when expression="#[vars.duplicate]">
+                        <logger level="WARN" doc:name="Log Replay Duplicate" message='#[output application/java --- "REPLAY corr=$(correlationId) opp=$(vars.oppId): DUPLICATE version, nothing re-published"]' />
+                        <ee:transform doc:name="Build skipped response (duplicate)">
+                            <ee:message>
+                                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: correlationId,
+  opportunityId: vars.oppResult[0].Id,
+  result: "SKIPPED_DUPLICATE",
+  message: "This opportunity version was already handled, nothing re-published (send force=true to override)"
+}]]></ee:set-payload>
+                            </ee:message>
+                            <ee:variables>
+                                <ee:set-variable variableName="httpStatus">200</ee:set-variable>
+                            </ee:variables>
+                        </ee:transform>
+                    </when>
+                    <otherwise>
+                        <set-payload value="#[vars.oppResult[0]]" doc:name="Opportunity as payload" />
+                        <ee:transform doc:name="Build queue message">
+                            <ee:message>
+                                <ee:set-payload resource="dwl/build-queue-message.dwl" />
+                            </ee:message>
+                        </ee:transform>
+                        <set-variable variableName="queueCorrId" value="#[payload.correlationId]" doc:name="Set queue correlation id" />
+                        <vm:publish doc:name="Publish to orders-queue" config-ref="VM_Config" queueName="orders-queue">
+                            <vm:content><![CDATA[#[payload]]]></vm:content>
+                        </vm:publish>
+                        <logger level="INFO" doc:name="Log Replay Published" message='#[output application/java --- "REPLAY corr=$(vars.queueCorrId) opp=$(vars.oppId): PUBLISHED to orders-queue, force=$(vars.force)"]' />
+                        <ee:transform doc:name="Build replay response">
+                            <ee:message>
+                                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  correlationId: vars.queueCorrId,
+  opportunityId: vars.oppId,
+  result: "REPUBLISHED",
+  message: "Event re-published to orders-queue"
+}]]></ee:set-payload>
+                            </ee:message>
+                            <ee:variables>
+                                <ee:set-variable variableName="httpStatus">202</ee:set-variable>
+                            </ee:variables>
+                        </ee:transform>
+                    </otherwise>
+                </choice>
+            </otherwise>
+        </choice>
+    </flow>
+</mule>

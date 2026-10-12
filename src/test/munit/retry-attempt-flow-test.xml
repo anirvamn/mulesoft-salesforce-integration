@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <munit:config name="retry-attempt-flow-test-suite"/>
+
+    <!-- Test 1: Successful operation -->
+    <munit:test name="retry-attempt-flow-success-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="flow-ref">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute
+                        attributeName="name"
+                        whereValue="#['mock-operation-flow']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[payload]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event>
+                <munit:variables>
+                    <munit:variable key="retryOpFlow"
+                                    value="#['mock-operation-flow']"/>
+                    <munit:variable key="retryAttempt" value="#[0]"/>
+                </munit:variables>
+            </munit:set-event>
+            <flow-ref name="retry-attempt-flow"/>
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-equals
+                actual="#[vars.retryStatus]"
+                expected="#['OK']"/>
+            <munit-tools:assert-equals
+                actual="#[vars.retryAttempt]"
+                expected="#[0]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 2: Permanent error -->
+    <munit:test name="retry-attempt-flow-permanent-error-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="flow-ref">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute
+                        attributeName="name"
+                        whereValue="#['mock-operation-flow']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="MULE:EXPRESSION"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+
+        <munit:execution>
+            <munit:set-event>
+                <munit:variables>
+                    <munit:variable key="retryOpFlow"
+                                    value="#['mock-operation-flow']"/>
+                    <munit:variable key="retryAttempt" value="#[0]"/>
+                </munit:variables>
+            </munit:set-event>
+            <flow-ref name="retry-attempt-flow"/>
+        </munit:execution>
+
+        <munit:validation>
+            <munit-tools:assert-equals
+                actual="#[vars.retryStatus]"
+                expected="#['PERMANENT']"/>
+            <munit-tools:assert-equals
+                actual="#[vars.retryAttempt]"
+                expected="#[0]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

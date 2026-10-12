@@ -1,0 +1,154 @@
+#%RAML 1.0
+title: Order Replay and Status API
+version: v1
+baseUri: http://localhost:8081/api
+mediaType: application/json
+
+types:
+  ReplayRequest:
+    type: object
+    properties:
+      opportunityId:
+        type: string
+        description: Salesforce Opportunity Id (15 or 18 characters)
+        minLength: 15
+        maxLength: 18
+      force:
+        type: boolean
+        required: false
+        default: false
+        description: If true, skip the duplicate check and re-publish the event
+    example:
+      opportunityId: "006gK00000PpiQPQAZ"
+      force: false
+
+  ReplayResponse:
+    type: object
+    properties:
+      correlationId: string
+      opportunityId: string
+      result:
+        type: string
+        enum: [REPUBLISHED, SKIPPED_DUPLICATE]
+      message: string
+    example:
+      correlationId: "3fa6b2d1-8c47-4e90-b1a5-77e2c4f0d913"
+      opportunityId: "006gK00000PpiQPQAZ"
+      result: REPUBLISHED
+      message: "Event re-published to orders-queue"
+
+  OrderLine:
+    type: object
+    properties:
+      lineNumber: integer
+      productCode: string
+      productName: string
+      quantity: number
+      unitPrice: number
+      lineTotal: number
+
+  OrderStatus:
+    type: object
+    properties:
+      orderNumber: string
+      opportunityId: string
+      accountName: string
+      currency: string
+      totalAmount: number
+      lineCount: integer
+      orderStatus:
+        type: string
+        enum: [RECEIVED, VALIDATED, PERSISTED, FILE_GENERATED, SF_UPDATED, NOTIFIED]
+      fileName:
+        type: string
+        required: false
+      sfUpdateStatus:
+        type: string
+        required: false
+      emailStatus:
+        type: string
+        required: false
+      correlationId: string
+      lines: OrderLine[]
+    example:
+      orderNumber: "ERP-2026-000041"
+      opportunityId: "006gK00000PpiQPQAZ"
+      accountName: "Zenith Textiles"
+      currency: "INR"
+      totalAmount: 287400
+      lineCount: 2
+      orderStatus: NOTIFIED
+      fileName: "ORDER_ERP-2026-000041_20261011103825.xml"
+      sfUpdateStatus: "SUCCESS"
+      emailStatus: "SENT"
+      correlationId: "9ac64ef4-90fb-4bf8-867e-fb57d3dec901"
+      lines:
+        - lineNumber: 1
+          productCode: "PRD-AUT-140"
+          productName: "Automation Controller X140"
+          quantity: 6
+          unitPrice: 38900
+          lineTotal: 233400
+
+  ErrorResponse:
+    type: object
+    properties:
+      correlationId: string
+      errorCode: string
+      message: string
+    example:
+      correlationId: "3fa6b2d1-8c47-4e90-b1a5-77e2c4f0d913"
+      errorCode: "NOT_FOUND"
+      message: "No order found"
+
+/orders:
+  /replay:
+    post:
+      description: Re-publish the event for one opportunity to orders-queue. Honours the duplicate check unless force is true.
+      body:
+        application/json:
+          type: ReplayRequest
+      responses:
+        202:
+          description: Event re-published
+          body:
+            application/json:
+              type: ReplayResponse
+        200:
+          description: Skipped because this opportunity version was already processed (send force=true to override)
+          body:
+            application/json:
+              type: ReplayResponse
+        400:
+          description: Missing or invalid opportunityId
+          body:
+            application/json:
+              type: ErrorResponse
+        404:
+          description: Opportunity not found in Salesforce
+          body:
+            application/json:
+              type: ErrorResponse
+        500:
+          description: Unexpected error
+          body:
+            application/json:
+              type: ErrorResponse
+  /{orderNumber}:
+    get:
+      description: Get the stored order and its current status
+      responses:
+        200:
+          body:
+            application/json:
+              type: OrderStatus
+        404:
+          description: No order with this number
+          body:
+            application/json:
+              type: ErrorResponse
+        500:
+          description: Unexpected error
+          body:
+            application/json:
+              type: ErrorResponse

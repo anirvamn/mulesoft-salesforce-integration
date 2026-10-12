@@ -1,0 +1,783 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:email="http://www.mulesoft.org/schema/mule/email"
+      xmlns:file="http://www.mulesoft.org/schema/mule/file"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd
+        http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd">
+
+    <configuration-properties file="local.properties" />
+
+    <os:object-store name="Idempotent_Store" persistent="true" entryTtl="7" entryTtlUnit="DAYS" doc:name="Idempotent Store" />
+
+    <os:object-store name="Watermark_Store" persistent="true" doc:name="Watermark Store" />
+
+    <vm:config name="VM_Config" doc:name="VM Config">
+        <vm:queues>
+            <vm:queue queueName="orders-queue" queueType="PERSISTENT" />
+            <vm:queue queueName="orders-dlq" queueType="PERSISTENT" />
+        </vm:queues>
+    </vm:config>
+
+    <db:config name="Database_Config" doc:name="Database Config">
+        <db:generic-connection
+            url="jdbc:postgresql://${db.host}:${db.port}/${db.name}"
+            driverClassName="org.postgresql.Driver"
+            user="${db.user}"
+            password="${db.password}" />
+    </db:config>
+
+    <file:config name="File_Config" doc:name="File Config">
+        <file:connection workingDir="${warehouse.dir}" />
+    </file:config>
+
+    <email:smtp-config name="Email_SMTP_Config" doc:name="Email SMTP Config">
+        <email:smtp-connection host="${smtp.host}" port="${smtp.port}" user="${smtp.user}" password="${smtp.password}" />
+    </email:smtp-config>
+
+    <salesforce:sfdc-config name="Salesforce_Config">
+        <salesforce:basic-connection
+            username="${sf.username}"
+            password="${sf.password}"
+            securityToken="${sf.token}"
+            url="https://login.salesforce.com/services/Soap/u/64.0"/>
+    </salesforce:sfdc-config>
+
+    <flow name="sf-opportunity-listener-flow">
+        <salesforce:modified-object-listener
+            doc:name="On Modified Object"
+            config-ref="Salesforce_Config"
+            objectType="Opportunity">
+            <scheduling-strategy>
+                <fixed-frequency frequency="${sf.poll.frequency.ms}" />
+            </scheduling-strategy>
+        </salesforce:modified-object-listener>
+        <choice doc:name="Closed Won and not processed?">
+            <when expression="#[payload.StageName == 'Closed Won' and (payload.Integration_Status__c default '') != 'PROCESSED' and (payload.Integration_Status__c default '') != 'FAILED']">
+                <set-variable variableName="idemKey" value='#["$(payload.Id)|$(payload.LastModifiedDate)"]' doc:name="Keep duplicate key" />
+                <idempotent-message-validator doc:name="Duplicate check" idExpression='#["$(payload.Id)|$(payload.LastModifiedDate)"]' objectStore="Idempotent_Store" />
+                <logger level="INFO" doc:name="Log Accepted" message='#["ACCEPTED opportunity $(payload.Id) modified $(payload.LastModifiedDate)"]' />
+                <ee:transform doc:name="Build queue message">
+                    <ee:message>
+                        <ee:set-payload resource="dwl/build-queue-message.dwl" />
+                    </ee:message>
+                </ee:transform>
+                <set-variable variableName="queueEvent" value="#[payload]" doc:name="Keep queue event" />
+                <set-variable variableName="corrId" value="#[payload.correlationId]" doc:name="Set corrId" />
+                <set-variable variableName="oppId" value="#[payload.payload.opportunityId]" doc:name="Set oppId" />
+                <set-variable variableName="retryOpFlow" value="publish-orders-queue-op-flow" doc:name="Operation: publish to queue" />
+                <flow-ref name="retry-flow" doc:name="Retry: publish to queue" />
+                <logger level="INFO" doc:name="Log Published" message='#["PUBLISHED to orders-queue: correlationId $(vars.queueEvent.correlationId) opportunity $(vars.queueEvent.payload.opportunityId)"]' />
+                <os:store key="lastProcessedModified" objectStore="Watermark_Store" doc:name="Save watermark">
+                    <os:value>#[vars.queueEvent.payload.lastModifiedDate as String]</os:value>
+                </os:store>
+                <logger level="INFO" doc:name="Log Watermark" message='#["WATERMARK saved: $(vars.queueEvent.payload.lastModifiedDate)"]' />
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="Log Skipped" message='#["SKIPPED opportunity $(payload.Id) stage=$(payload.StageName default "")"]' />
+            </otherwise>
+        </choice>
+        <error-handler>
+            <on-error-continue type="MULE:DUPLICATE_MESSAGE" enableNotifications="false" logException="false">
+                <logger level="WARN" doc:name="Log Duplicate" message='#["DUPLICATE ignored: opportunity $(payload.Id) version $(payload.LastModifiedDate)"]' />
+            </on-error-continue>
+            <on-error-continue type="APP:RETRY_FAILED" enableNotifications="false" logException="false">
+                <logger level="ERROR" doc:name="Log Publish Failed" message='#[output application/java --- "PUBLISH FAILED corr=$(vars.corrId default "none") opp=$(vars.oppId default "none"): " ++ (vars.retryError default "unknown") ++ ". Replay with POST /api/orders/replay (opportunityId, force=true)"]' />
+                <try doc:name="Free duplicate key">
+                    <os:remove key="#[vars.idemKey]" objectStore="Idempotent_Store" doc:name="Remove duplicate key" />
+                    <error-handler>
+                        <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                            <logger level="WARN" doc:name="Log Key Not Removed" message="Duplicate key could not be removed after the publish failure." />
+                        </on-error-continue>
+                    </error-handler>
+                </try>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="publish-orders-queue-op-flow">
+        <vm:publish doc:name="Publish to orders-queue" config-ref="VM_Config" queueName="orders-queue">
+            <vm:content><![CDATA[#[vars.queueEvent]]]></vm:content>
+        </vm:publish>
+    </flow>
+
+    <flow name="order-consumer-flow">
+        <vm:listener doc:name="Listener orders-queue" config-ref="VM_Config" queueName="orders-queue" />
+        <set-variable variableName="queueMessage" value="#[payload]" doc:name="Keep original message" />
+        <logger level="INFO" doc:name="Log Consumed" message='#["CONSUMED from orders-queue: correlationId $(payload.correlationId default "none") opportunity $(payload.payload.opportunityId default "none")"]' />
+        <choice doc:name="Valid message?">
+            <when expression="#[not isEmpty(payload.correlationId default '') and not isEmpty(payload.payload.opportunityId default '') and not isEmpty(payload.payload.accountId default '') and not isEmpty(payload.payload.lastModifiedDate default '')]">
+                <logger level="INFO" doc:name="Log Validated" message='#["VALIDATED message: correlationId $(payload.correlationId) opportunity $(payload.payload.opportunityId)"]' />
+                <set-variable variableName="corrId" value="#[payload.correlationId]" doc:name="Set corrId" />
+                <set-variable variableName="oppId" value="#[payload.payload.opportunityId]" doc:name="Set oppId" />
+                <set-variable variableName="retryOpFlow" value="sf-enrich-query-op-flow" doc:name="Operation: enrichment query" />
+                <flow-ref name="retry-flow" doc:name="Retry: query opportunity" />
+                <ee:transform doc:name="Verify amount">
+                    <ee:message />
+                    <ee:variables>
+                        <ee:set-variable variableName="amountCheck" resource="dwl/verify-amount.dwl" />
+                    </ee:variables>
+                </ee:transform>
+                <ee:transform doc:name="Validate reference data">
+                    <ee:message />
+                    <ee:variables>
+                        <ee:set-variable variableName="refCheck" resource="dwl/validate-reference-data.dwl" />
+                    </ee:variables>
+                </ee:transform>
+                <choice doc:name="Lines, amount and reference data OK?">
+                    <when expression="#[not vars.amountCheck.hasLines]">
+                        <logger level="ERROR" doc:name="Log No Lines" message='#["BUSINESS ERROR corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): opportunity has no line items"]' />
+                        <set-variable variableName="businessErrorCode" value="NO_LINE_ITEMS" doc:name="Code NO_LINE_ITEMS" />
+                        <set-variable variableName="businessErrorMessage" value="Opportunity has no line items, no order was created" doc:name="Message no lines" />
+                        <flow-ref name="business-error-flow" doc:name="Handle business error" />
+                    </when>
+                    <when expression="#[not vars.amountCheck.amountMatches]">
+                        <logger level="ERROR" doc:name="Log Amount Mismatch" message='#[output application/java --- "BUSINESS ERROR corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): amount mismatch, lines total $(vars.amountCheck.calculatedTotal) but opportunity amount $(vars.amountCheck.opportunityAmount), tolerance $(vars.amountCheck.tolerance)"]' />
+                        <set-variable variableName="businessErrorCode" value="AMOUNT_MISMATCH" doc:name="Code AMOUNT_MISMATCH" />
+                        <set-variable variableName="businessErrorMessage" value='#[output application/java --- "Amount mismatch: line items total $(vars.amountCheck.calculatedTotal) but opportunity amount is $(vars.amountCheck.opportunityAmount), tolerance $(vars.amountCheck.tolerance)"]' doc:name="Message amount mismatch" />
+                        <flow-ref name="business-error-flow" doc:name="Handle business error" />
+                    </when>
+                    <when expression="#[vars.refCheck.hasMissing]">
+                        <logger level="ERROR" doc:name="Log Missing Reference Data" message='#[output application/java --- "BUSINESS ERROR corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): missing reference data: $(vars.refCheck.message)"]' />
+                        <set-variable variableName="businessErrorCode" value="MISSING_REFERENCE_DATA" doc:name="Code MISSING_REFERENCE_DATA" />
+                        <set-variable variableName="businessErrorMessage" value='#[output application/java --- "Missing reference data: $(vars.refCheck.message)"]' doc:name="Message missing data" />
+                        <flow-ref name="business-error-flow" doc:name="Handle business error" />
+                    </when>
+                    <otherwise>
+                        <logger level="INFO" doc:name="Log Amount OK" message='#["AMOUNT OK corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): $(vars.amountCheck.lineCount) lines total $(vars.amountCheck.calculatedTotal), matches opportunity amount $(vars.amountCheck.opportunityAmount)"]' />
+                        <set-variable variableName="retryOpFlow" value="order-number-op-flow" doc:name="Operation: order number" />
+                        <flow-ref name="retry-flow" doc:name="Retry: order number" />
+                        <logger level="INFO" doc:name="Log Order Number" message='#[output application/java --- "ORDER NUMBER corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): $(vars.orderNumber default "none")"]' />
+                        <ee:transform doc:name="Build canonical order">
+                            <ee:message />
+                            <ee:variables>
+                                <ee:set-variable variableName="canonicalOrder" resource="dwl/build-canonical-order.dwl" />
+                            </ee:variables>
+                        </ee:transform>
+                        <logger level="INFO" doc:name="Log Canonical Order" message='#[output application/java --- "CANONICAL ORDER corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): " ++ write(vars.canonicalOrder, "application/json")]' />
+                        <set-variable variableName="retryOpFlow" value="persist-order-flow" doc:name="Operation: persist order" />
+                        <flow-ref name="retry-flow" doc:name="Retry: persist order" />
+                        <choice doc:name="Order persisted?">
+                            <when expression="#[vars.persistResult == 'OK']">
+                                <logger level="INFO" doc:name="Log Persisted" message='#[output application/java --- "PERSISTED corr=$(vars.corrId) opp=$(vars.oppId): order $(vars.orderNumber) saved with $(vars.canonicalOrder.lineCount) lines"]' />
+                                <set-variable variableName="finalFileName" value='#[output application/java --- "ORDER_" ++ vars.orderNumber ++ "_" ++ ((now() >> "Asia/Kolkata") as String {format: "yyyyMMddHHmmss"}) ++ ".xml"]' doc:name="Set final file name" />
+                                <set-variable variableName="tempFileName" value="#[vars.finalFileName ++ '.tmp']" doc:name="Set temp file name" />
+                                <ee:transform doc:name="Build fulfilment XML">
+                                    <ee:message />
+                                    <ee:variables>
+                                        <ee:set-variable variableName="fulfilmentXml" resource="dwl/build-fulfilment-xml.dwl" />
+                                    </ee:variables>
+                                </ee:transform>
+                                <flow-ref name="write-fulfilment-file-flow" doc:name="Write fulfilment file" />
+                                <choice doc:name="File written?">
+                                    <when expression="#[vars.fileOk == true]">
+                                        <set-variable variableName="newStatus" value="FILE_GENERATED" doc:name="Status FILE_GENERATED" />
+                                        <flow-ref name="update-order-status-flow" doc:name="Update status" />
+                                        <logger level="INFO" doc:name="Log File Generated" message='#[output application/java --- "FILE GENERATED corr=$(vars.corrId) opp=$(vars.oppId): $(vars.finalFileName)"]' />
+                                        <flow-ref name="salesforce-writeback-flow" doc:name="Write back to Salesforce" />
+                                        <flow-ref name="send-notification-flow" doc:name="Send notification" />
+                                    </when>
+                                    <otherwise>
+                                        <logger level="ERROR" doc:name="Log Order Without File" message='#[output application/java --- "ORDER KEPT WITHOUT FILE corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): file_status FILE_FAILED, write-back and email skipped"]' />
+                                    </otherwise>
+                                </choice>
+                            </when>
+                            <otherwise>
+                                <logger level="WARN" doc:name="Log Not Persisted" message='#[output application/java --- "ORDER NOT CREATED corr=$(vars.corrId) opp=$(vars.oppId): result $(vars.persistResult)"]' />
+                            </otherwise>
+                        </choice>
+                    </otherwise>
+                </choice>
+            </when>
+            <otherwise>
+                <logger level="WARN" doc:name="Log Invalid" message='#["INVALID message sent to orders-dlq: correlationId $(payload.correlationId default "none")"]' />
+                <vm:publish doc:name="Publish to orders-dlq" config-ref="VM_Config" queueName="orders-dlq">
+                    <vm:content><![CDATA[#[payload]]]></vm:content>
+                </vm:publish>
+            </otherwise>
+        </choice>
+        <error-handler>
+            <on-error-continue type="APP:RETRY_FAILED" enableNotifications="false" logException="false">
+                <logger level="ERROR" doc:name="Log System Error" message='#[output application/java --- "SYSTEM ERROR corr=$(vars.corrId default "none") opp=$(vars.oppId default "none") (" ++ (vars.retryStatus default "UNKNOWN") ++ "): " ++ (error.description default "unknown")]' />
+                <vm:publish doc:name="Publish failed message to orders-dlq" config-ref="VM_Config" queueName="orders-dlq">
+                    <vm:content><![CDATA[#[vars.queueMessage]]]></vm:content>
+                </vm:publish>
+                <logger level="WARN" doc:name="Log Sent To DLQ" message='#[output application/java --- "SENT TO DLQ corr=$(vars.corrId default "none") opp=$(vars.oppId default "none"): message moved to orders-dlq"]' />
+                <try doc:name="Record system exception">
+                    <db:insert doc:name="Record system exception" config-ref="Database_Config" target="sysExceptionResult">
+                        <db:sql><![CDATA[INSERT INTO order_exception (opportunity_id, order_number, error_code, error_message, retry_count, correlation_id)
+                            VALUES (:opportunityId, NULL, :errorCode, :errorMessage, :retryCount, :correlationId)]]></db:sql>
+                        <db:input-parameters><![CDATA[#[{
+                            opportunityId: vars.oppId default "unknown",
+                            errorCode: if ((vars.retryStatus default "") == "PERMANENT") "SYSTEM_PERMANENT_ERROR" else if ((vars.retryStatus default "") == "AUTH_FAILED") "SF_AUTH_FAILED" else "SYSTEM_RETRY_EXHAUSTED",
+                            errorMessage: do { var m = (error.description default "") --- if (sizeOf(m) > 500) m[0 to 499] else m },
+                            retryCount: (vars.retryAttempt default 0) as Number,
+                            correlationId: vars.corrId default "unknown"
+                        }]]]></db:input-parameters>
+                    </db:insert>
+                    <error-handler>
+                        <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                            <logger level="WARN" doc:name="Log Exception Not Recorded" message="Could not record the system exception in the database (it may be down). The message is in orders-dlq." />
+                        </on-error-continue>
+                    </error-handler>
+                </try>
+            </on-error-continue>
+            <on-error-continue type="MULE:EXPRESSION" enableNotifications="false" logException="false">
+                <logger level="WARN" doc:name="Log Corrupt" message='#["CORRUPT message sent to orders-dlq. Reason: " ++ (error.description default "unknown")]' />
+                <vm:publish doc:name="Publish corrupt to orders-dlq" config-ref="VM_Config" queueName="orders-dlq">
+                    <vm:content><![CDATA[#[payload]]]></vm:content>
+                </vm:publish>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="retry-flow">
+        <set-variable variableName="retryAttempt" value="#[0]" doc:name="Attempt 0" />
+        <set-variable variableName="authRetried" value="#[false]" doc:name="Re-login not used yet" />
+        <set-variable variableName="retryStatus" value="OK" doc:name="Status OK" />
+        <flow-ref name="retry-attempt-flow" doc:name="Run attempt" />
+        <choice doc:name="Succeeded?">
+            <when expression="#[vars.retryStatus != 'OK']">
+                <raise-error type="APP:RETRY_FAILED" description="#[vars.retryError default 'unknown']" doc:name="Raise retry failed" />
+            </when>
+        </choice>
+    </flow>
+
+    
+<flow name="retry-attempt-flow">
+    <try doc:name="Attempt operation">
+
+        <flow-ref name="#[vars.retryOpFlow]" doc:name="Run operation"/>
+
+        <set-variable variableName="retryStatus"
+                      value="#['OK']"
+                      doc:name="Status OK"/>
+
+        <error-handler>
+            <on-error-continue type="ANY"
+                               enableNotifications="false"
+                               logException="false">
+
+                <set-variable variableName="retryError"
+                    value="#[output application/java --- do { var m = (error.description default 'Unknown error') as String --- if (sizeOf(m) > 500) m[0 to 499] else m }]"
+                    doc:name="Keep error reason"/>
+
+                <set-variable variableName="retryErrorType"
+                    value="#[upper((error.errorType.namespace default '') as String) ++ ':' ++ upper((error.errorType.identifier default '') as String)]"
+                    doc:name="Keep error type"/>
+
+                <set-variable variableName="retryIsAuth"
+    value="#[(['sf-enrich-query-op-flow', 'sf-writeback-op-flow'] contains (vars.retryOpFlow default '')) and ((lower(vars.retryError default '') contains 'invalid_login') or (lower(vars.retryError default '') contains 'invalid_session_id') or (lower(vars.retryError default '') contains 'invalid username, password') or (lower(vars.retryError default '') contains 'session expired') or (lower(vars.retryError default '') contains 'unauthorized') or (lower(vars.retryError default '') contains 'authentication') or (lower(vars.retryError default '') contains 'login_must_use_security_token') or (lower(vars.retryError default '') contains 'invalid_grant'))]"
+    doc:name="Detect Salesforce authentication error"/>
+
+                <set-variable variableName="retryableError"
+    value="#[(lower(vars.retryError default '') contains 'unable_to_lock_row') or (lower(vars.retryError default '') contains 'request_limit_exceeded') or (lower(vars.retryError default '') contains 'too many requests') or (lower(vars.retryError default '') contains 'timeout') or (lower(vars.retryError default '') contains 'timed out') or (lower(vars.retryError default '') contains 'connection reset') or (lower(vars.retryError default '') contains 'connection refused') or (lower(vars.retryError default '') contains 'broken pipe') or (lower(vars.retryError default '') contains 'temporarily unavailable') or (lower(vars.retryError default '') contains 'service unavailable') or (lower(vars.retryError default '') contains 'could not connect') or (lower(vars.retryError default '') contains 'deadlock detected') or (lower(vars.retryError default '') contains 'could not serialize access') or (lower(vars.retryError default '') contains 'http 429') or (lower(vars.retryError default '') contains 'http 502') or (lower(vars.retryError default '') contains 'http 503') or (lower(vars.retryError default '') contains 'http 504') or (lower(vars.retryErrorType default '') contains 'timeout') or (lower(vars.retryErrorType default '') contains 'connectivity')]"
+    doc:name="Detect transient error"/>
+
+                <choice doc:name="Classify error">
+
+                    <when expression="#[vars.retryIsAuth and not (vars.authRetried default false)]">
+                        <set-variable variableName="authRetried"
+                                      value="#[true]"
+                                      doc:name="Allow one auth retry"/>
+
+                        <logger level="WARN"
+                            message="#['Salesforce authentication error; retrying operation once. This does not guarantee session refresh. Reason: ' ++ vars.retryError]"
+                            doc:name="Log authentication retry"/>
+
+                        <flow-ref name="retry-attempt-flow"
+                                  doc:name="Retry Salesforce operation once"/>
+                    </when>
+
+                    <when expression="#[vars.retryIsAuth]">
+                        <set-variable variableName="retryStatus"
+                                      value="#['AUTH_FAILED']"
+                                      doc:name="Stop after auth failure"/>
+
+                        <logger level="ERROR"
+                            message="#['Salesforce authentication retry failed. Manual authentication/configuration check required. Reason: ' ++ vars.retryError]"
+                            doc:name="Log auth failure"/>
+                    </when>
+
+                    <when expression="#[not vars.retryableError]">
+                        <set-variable variableName="retryStatus"
+                                      value="#['PERMANENT']"
+                                      doc:name="Stop on permanent or unknown error"/>
+
+                        <logger level="ERROR"
+                            message="#['Not retrying permanent or unclassified error. Type: ' ++ vars.retryErrorType ++ ', reason: ' ++ vars.retryError]"
+                            doc:name="Log non-retryable error"/>
+                    </when>
+
+                    <when expression="#[(vars.retryAttempt as Number) >= (p('retry.max') as Number)]">
+                        <set-variable variableName="retryStatus"
+                                      value="#['EXHAUSTED']"
+                                      doc:name="Mark retries exhausted"/>
+
+                        <logger level="ERROR"
+                            message="#['Retries exhausted. Operation: ' ++ (vars.retryOpFlow default 'unknown') ++ ', attempts: ' ++ ((vars.retryAttempt as Number) + 1) ++ ', reason: ' ++ vars.retryError]"
+                            doc:name="Log retries exhausted"/>
+                    </when>
+
+                    <otherwise>
+                        <set-variable variableName="retryDelayMs"
+    value="#[(p('retry.delay.ms') as Number) * ([1, 2, 4, 8, 16, 32][(vars.retryAttempt default 0) as Number] default 32)]"
+    doc:name="Calculate exponential backoff"/>
+
+                        <logger level="WARN"
+                            message="#['Transient error. Retrying operation ' ++ (vars.retryOpFlow default 'unknown') ++ ' after ' ++ (vars.retryDelayMs as String) ++ ' ms. Retry number: ' ++ ((vars.retryAttempt as Number) + 1) ++ '. Reason: ' ++ vars.retryError]"
+                            doc:name="Log retry"/>
+
+                        <ee:transform doc:name="Backoff pause">
+                            <ee:message/>
+                            <ee:variables>
+                                <ee:set-variable variableName="retryPause"><![CDATA[%dw 2.0
+import java!java::lang::Thread
+output application/java
+---
+Thread::sleep(vars.retryDelayMs as Number)]]></ee:set-variable>
+                            </ee:variables>
+                        </ee:transform>
+
+                        <set-variable variableName="retryAttempt"
+                            value="#[(vars.retryAttempt as Number) + 1]"
+                            doc:name="Increment retry counter"/>
+
+                        <flow-ref name="retry-attempt-flow"
+                                  doc:name="Retry transient failure"/>
+                    </otherwise>
+
+                </choice>
+            </on-error-continue>
+        </error-handler>
+    </try>
+</flow>
+
+    <flow name="sf-enrich-query-op-flow">
+        <salesforce:query doc:name="Query opportunity details" config-ref="Salesforce_Config" target="enriched">
+            <salesforce:salesforce-query><![CDATA[SELECT Id, Name, AccountId, StageName, Amount, CloseDate, OwnerId, Owner.Email, Pricebook2Id, ERP_Order_Number__c, Integration_Status__c, LastModifiedDate, SystemModstamp, Account.Name, Account.AccountNumber, Account.ShippingStreet, Account.ShippingCity, Account.ShippingState, Account.ShippingPostalCode, Account.ShippingCountry, (SELECT Id, Quantity, UnitPrice, TotalPrice, Product2Id, Product2.Name, Product2.ProductCode FROM OpportunityLineItems), (SELECT ContactId, Contact.Name, Contact.Email, Contact.Phone FROM OpportunityContactRoles WHERE IsPrimary = true) FROM Opportunity WHERE Id = ':oppId']]></salesforce:salesforce-query>
+            <salesforce:parameters><![CDATA[#[{ oppId: vars.oppId }]]]></salesforce:parameters>
+        </salesforce:query>
+    </flow>
+
+    <flow name="order-number-op-flow">
+        <db:select doc:name="Get next order number" config-ref="Database_Config" target="orderNumber" targetValue="#[payload[0].order_number]">
+            <db:sql><![CDATA[SELECT 'ERP-' || to_char(now(), 'YYYY') || '-' || LPAD(CAST(nextval('order_number_seq') AS TEXT), 6, '0') AS order_number]]></db:sql>
+        </db:select>
+    </flow>
+
+    <flow name="persist-order-flow">
+        <set-variable variableName="persistResult" value="FAILED" doc:name="Reset result" />
+        <try transactionalAction="ALWAYS_BEGIN" doc:name="Transaction: header and lines">
+            <db:insert doc:name="Insert order header" config-ref="Database_Config" target="headerResult">
+                <db:sql><![CDATA[INSERT INTO sales_order
+                    (order_number, opportunity_id, account_id, account_name, account_number,
+                     contact_name, contact_email, contact_phone,
+                     address_line1, city, state, postal_code, country,
+                     currency, total_amount, line_count, order_status, sf_last_modified, correlation_id)
+                    VALUES
+                    (:orderNumber, :opportunityId, :accountId, :accountName, :accountNumber,
+                     :contactName, :contactEmail, :contactPhone,
+                     :addressLine1, :city, :state, :postalCode, :country,
+                     :currency, :totalAmount, :lineCount, :orderStatus, CAST(:lastModified AS TIMESTAMP), :correlationId)]]></db:sql>
+                <db:input-parameters><![CDATA[#[{
+                    orderNumber: vars.canonicalOrder.orderNumber,
+                    opportunityId: vars.canonicalOrder.opportunityId,
+                    accountId: vars.canonicalOrder.account.accountId,
+                    accountName: vars.canonicalOrder.account.accountName,
+                    accountNumber: vars.canonicalOrder.account.accountNumber,
+                    contactName: vars.canonicalOrder.account.contactName,
+                    contactEmail: vars.canonicalOrder.account.contactEmail,
+                    contactPhone: vars.canonicalOrder.account.contactPhone,
+                    addressLine1: vars.canonicalOrder.shippingAddress.addressLine1,
+                    city: vars.canonicalOrder.shippingAddress.city,
+                    state: vars.canonicalOrder.shippingAddress.state,
+                    postalCode: vars.canonicalOrder.shippingAddress.postalCode,
+                    country: vars.canonicalOrder.shippingAddress.country,
+                    currency: vars.canonicalOrder.currency,
+                    totalAmount: vars.canonicalOrder.totalAmount,
+                    lineCount: vars.canonicalOrder.lineCount,
+                    orderStatus: vars.canonicalOrder.orderStatus,
+                    lastModified: (vars.enriched[0].LastModifiedDate as DateTime) as String {format: "yyyy-MM-dd HH:mm:ss"},
+                    correlationId: vars.canonicalOrder.correlationId
+                }]]]></db:input-parameters>
+            </db:insert>
+            <foreach collection="#[vars.canonicalOrder.lines]" doc:name="For each line">
+                <db:insert doc:name="Insert order line" config-ref="Database_Config" target="lineResult">
+                    <db:sql><![CDATA[INSERT INTO sales_order_line
+                        (order_number, line_number, product_code, product_name, quantity, unit_price, line_total)
+                        VALUES (:orderNumber, :lineNumber, :productCode, :productName, :quantity, :unitPrice, :lineTotal)]]></db:sql>
+                    <db:input-parameters><![CDATA[#[{
+                        orderNumber: vars.canonicalOrder.orderNumber,
+                        lineNumber: payload.lineNumber,
+                        productCode: payload.productCode,
+                        productName: payload.productName,
+                        quantity: payload.quantity,
+                        unitPrice: payload.unitPrice,
+                        lineTotal: payload.lineTotal
+                    }]]]></db:input-parameters>
+                </db:insert>
+            </foreach>
+        </try>
+        <set-variable variableName="newStatus" value="PERSISTED" doc:name="Status PERSISTED" />
+        <flow-ref name="update-order-status-flow" doc:name="Update status" />
+        <set-variable variableName="persistResult" value="OK" doc:name="Result OK" />
+        <error-handler>
+            <on-error-continue type="DB:QUERY_EXECUTION"
+    when="#[lower(error.description default '') contains 'duplicate key']"
+    enableNotifications="false"
+    logException="false">
+                <set-variable variableName="persistResult" value="DUPLICATE" doc:name="Result DUPLICATE" />
+                <logger level="WARN" doc:name="Log Duplicate Order" message='#[output application/java --- "DUPLICATE ORDER corr=$(vars.corrId) opp=$(vars.oppId): an order already exists for this opportunity, nothing created"]' />
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="update-order-status-flow">
+        <db:update doc:name="Update order status" config-ref="Database_Config" target="statusResult">
+            <db:sql><![CDATA[UPDATE sales_order
+                SET order_status = :status,
+                    file_name = CASE WHEN :fileName = '' THEN file_name ELSE :fileName END,
+                    updated_at = now()
+                WHERE order_number = :orderNumber]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ status: vars.newStatus, fileName: vars.finalFileName default "", orderNumber: vars.orderNumber }]]]></db:input-parameters>
+        </db:update>
+        <logger level="INFO" doc:name="Log Status" message='#[output application/java --- "STATUS corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): $(vars.newStatus)"]' />
+    </flow>
+
+    <flow name="write-file-op-flow">
+        <file:write doc:name="Write temp file" config-ref="File_Config" path="#[vars.tempFileName]">
+            <file:content><![CDATA[#[vars.fulfilmentXml]]]></file:content>
+        </file:write>
+        <file:rename doc:name="Rename to final name" config-ref="File_Config" path="#[vars.tempFileName]" to="#[vars.finalFileName]" />
+    </flow>
+
+    <flow name="write-fulfilment-file-flow">
+        <set-variable variableName="fileOk" value="#[false]" doc:name="File not written yet" />
+        <set-variable variableName="retryOpFlow" value="write-file-op-flow" doc:name="Operation: write file" />
+        <flow-ref name="retry-flow" doc:name="Retry: write file" />
+        <set-variable variableName="fileOk" value="#[true]" doc:name="File written" />
+        <db:update doc:name="Mark file GENERATED" config-ref="Database_Config" target="fileOkResult">
+            <db:sql><![CDATA[UPDATE sales_order SET file_status = 'GENERATED', updated_at = now() WHERE order_number = :orderNumber]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+        </db:update>
+        <error-handler>
+            <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                <set-variable variableName="fileOk" value="#[false]" doc:name="File failed" />
+                <logger level="ERROR" doc:name="Log File Failure" message='#[output application/java --- "FILE WRITE FAILED corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): " ++ (error.description default "unknown")]' />
+                <db:update doc:name="Mark file FILE_FAILED" config-ref="Database_Config" target="fileFailResult">
+                    <db:sql><![CDATA[UPDATE sales_order SET file_status = 'FILE_FAILED', updated_at = now() WHERE order_number = :orderNumber]]></db:sql>
+                    <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+                </db:update>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="sf-writeback-op-flow">
+        <salesforce:update type="Opportunity" doc:name="Update opportunity" config-ref="Salesforce_Config" target="sfResult">
+            <salesforce:records><![CDATA[#[[{
+                Id: vars.oppId,
+                ERP_Order_Number__c: vars.orderNumber,
+                Integration_Status__c: "PROCESSED",
+                Integration_Message__c: "Order created and file despatched",
+                Fulfilment_Date__c: now()
+            }]]]]></salesforce:records>
+        </salesforce:update>
+    </flow>
+
+    <flow name="salesforce-writeback-flow">
+        <set-variable variableName="retryOpFlow" value="sf-writeback-op-flow" doc:name="Operation: write back" />
+        <flow-ref name="retry-flow" doc:name="Retry: write back" />
+        <logger level="INFO" doc:name="Log SF Result" message='#[output application/java --- "SF UPDATE RESULT corr=$(vars.corrId) opp=$(vars.oppId): " ++ write(vars.sfResult, "application/json")]' />
+        <db:update doc:name="Mark SF_UPDATED" config-ref="Database_Config" target="sfDbResult">
+            <db:sql><![CDATA[UPDATE sales_order
+                SET order_status = 'SF_UPDATED', sf_update_status = 'SUCCESS', updated_at = now()
+                WHERE order_number = :orderNumber]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+        </db:update>
+        <logger level="INFO" doc:name="Log SF_UPDATED" message='#[output application/java --- "STATUS corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): SF_UPDATED"]' />
+        <error-handler>
+            <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                <set-variable variableName="wbReason" value='#[output application/java --- do { var m = (error.description default "unknown") --- if (sizeOf(m) > 400) m[0 to 399] else m }]' doc:name="Write-back failure reason" />
+                <logger level="ERROR" doc:name="Log SF Failure" message='#[output application/java --- "SF WRITE-BACK FAILED corr=$(vars.corrId) opp=$(vars.oppId): " ++ vars.wbReason]' />
+                <db:update doc:name="Mark SF write-back FAILED" config-ref="Database_Config" target="sfDbFailResult">
+                    <db:sql><![CDATA[UPDATE sales_order SET sf_update_status = 'FAILED', updated_at = now() WHERE order_number = :orderNumber]]></db:sql>
+                    <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+                </db:update>
+                <try doc:name="Raise Task for owner">
+                    <salesforce:create type="Task" doc:name="Create write-back Task" config-ref="Salesforce_Config" target="sfWbTaskResult">
+                        <salesforce:records><![CDATA[#[output application/java --- [{
+                            Subject: "Integration write-back failed: " ++ vars.orderNumber,
+                            WhatId: vars.oppId,
+                            OwnerId: vars.enriched[0].OwnerId,
+                            Description: "Order " ++ vars.orderNumber ++ " was created and the file was written, but updating this opportunity in Salesforce failed. Please reconcile manually. Reason: " ++ vars.wbReason,
+                            Status: "Not Started",
+                            Priority: "High"
+                        }]]]]></salesforce:records>
+                    </salesforce:create>
+                    <logger level="INFO" doc:name="Log Write-back Task" message='#[output application/java --- "SF WRITE-BACK TASK RAISED corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): " ++ write(vars.sfWbTaskResult, "application/json")]' />
+                    <db:insert doc:name="Record write-back exception" config-ref="Database_Config" target="wbExceptionResult">
+                        <db:sql><![CDATA[INSERT INTO order_exception (opportunity_id, order_number, error_code, error_message, retry_count, sf_task_id, correlation_id)
+                            VALUES (:opportunityId, :orderNumber, 'SF_WRITEBACK_FAILED', :errorMessage, :retryCount, :taskId, :correlationId)]]></db:sql>
+                        <db:input-parameters><![CDATA[#[{
+                            opportunityId: vars.oppId,
+                            orderNumber: vars.orderNumber,
+                            errorMessage: vars.wbReason,
+                            retryCount: (vars.retryAttempt default 0) as Number,
+                            taskId: (vars.sfWbTaskResult.items[0].id default ""),
+                            correlationId: vars.corrId
+                        }]]]></db:input-parameters>
+                    </db:insert>
+                    <error-handler>
+                        <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                            <logger level="ERROR" doc:name="Log Task Not Raised" message='#[output application/java --- "SF WRITE-BACK TASK NOT RAISED corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): " ++ (error.description default "unknown")]' />
+                        </on-error-continue>
+                    </error-handler>
+                </try>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="send-email-op-flow">
+        <email:send config-ref="Email_SMTP_Config" doc:name="Send email" fromAddress="${notification.from}" subject='#["Order " ++ vars.orderNumber ++ " raised for " ++ vars.canonicalOrder.account.accountName]'>
+            <email:to-addresses>
+                <email:to-address value="${notification.fulfilmentDesk}" />
+            </email:to-addresses>
+            <email:cc-addresses>
+                <email:cc-address value="#[vars.ownerEmail default p('notification.fulfilmentDesk')]" />
+            </email:cc-addresses>
+            <email:body contentType="text/plain">
+                <email:content><![CDATA[#[vars.emailBody]]]></email:content>
+            </email:body>
+        </email:send>
+    </flow>
+
+    <flow name="send-notification-flow">
+        <ee:transform doc:name="Build email body">
+            <ee:message />
+            <ee:variables>
+                <ee:set-variable variableName="emailBody" resource="dwl/build-email-body.dwl" />
+            </ee:variables>
+        </ee:transform>
+        <set-variable variableName="ownerEmail" value="#[vars.enriched[0].Owner.Email default p('notification.fulfilmentDesk')]" doc:name="Owner email for CC" />
+        <set-variable variableName="retryOpFlow" value="send-email-op-flow" doc:name="Operation: send email" />
+        <flow-ref name="retry-flow" doc:name="Retry: send email" />
+        <db:update doc:name="Mark NOTIFIED" config-ref="Database_Config" target="mailDbResult">
+            <db:sql><![CDATA[UPDATE sales_order SET order_status = 'NOTIFIED', email_status = 'SENT', updated_at = now() WHERE order_number = :orderNumber]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+        </db:update>
+        <logger level="INFO" doc:name="Log Notified" message='#[output application/java --- "STATUS corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): NOTIFIED"]' />
+        <error-handler>
+            <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                <logger level="ERROR" doc:name="Log Email Failure" message='#[output application/java --- "EMAIL FAILED corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): marked PENDING_RETRY, order stays SF_UPDATED. " ++ (error.description default "unknown")]' />
+                <db:update doc:name="Mark PENDING_RETRY" config-ref="Database_Config" target="mailFailResult">
+                    <db:sql><![CDATA[UPDATE sales_order SET email_status = 'PENDING_RETRY', updated_at = now() WHERE order_number = :orderNumber]]></db:sql>
+                    <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+                </db:update>
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="email-retry-job-flow">
+        <scheduler doc:name="Email retry timer">
+            <scheduling-strategy>
+                <fixed-frequency frequency="${email.retry.frequency.ms}" startDelay="30000" />
+            </scheduling-strategy>
+        </scheduler>
+        <db:select doc:name="Find orders to re-email" config-ref="Database_Config">
+            <db:sql><![CDATA[SELECT order_number, opportunity_id, correlation_id, file_name, created_at,
+                    account_id, account_name, account_number, contact_name, contact_email, contact_phone,
+                    address_line1, city, state, postal_code, country, currency, total_amount, line_count
+                FROM sales_order
+                WHERE email_status = 'PENDING_RETRY'
+                ORDER BY updated_at
+                LIMIT :batchSize]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ batchSize: p('email.retry.batch.size') as Number }]]]></db:input-parameters>
+        </db:select>
+        <choice doc:name="Anything pending?">
+            <when expression="#[isEmpty(payload)]">
+                <logger level="DEBUG" doc:name="Log Nothing Pending" message="EMAIL RETRY JOB: nothing pending" />
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="Log Pending" message='#["EMAIL RETRY JOB: $(sizeOf(payload)) order(s) pending"]' />
+                <foreach doc:name="For each pending order">
+                    <flow-ref name="email-retry-one-flow" doc:name="Re-send one email" />
+                </foreach>
+            </otherwise>
+        </choice>
+        <error-handler>
+            <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                <logger level="ERROR" doc:name="Log Job Failure" message='#["EMAIL RETRY JOB FAILED: " ++ (error.description default "unknown")]' />
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="email-retry-one-flow">
+        <set-variable variableName="emailRow" value="#[payload]" doc:name="Keep order row" />
+        <set-variable variableName="orderNumber" value="#[payload.order_number]" doc:name="Set orderNumber" />
+        <set-variable variableName="oppId" value="#[payload.opportunity_id]" doc:name="Set oppId" />
+        <set-variable variableName="corrId" value="#[payload.correlation_id]" doc:name="Set corrId" />
+        <set-variable variableName="finalFileName" value='#[payload.file_name default ""]' doc:name="Set file name" />
+        <db:select doc:name="Load order lines" config-ref="Database_Config" target="orderLines">
+            <db:sql><![CDATA[SELECT line_number, product_code, product_name, quantity, unit_price, line_total
+                FROM sales_order_line WHERE order_number = :orderNumber ORDER BY line_number]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="Rebuild order from database">
+            <ee:message />
+            <ee:variables>
+                <ee:set-variable variableName="canonicalOrder"><![CDATA[%dw 2.0
+output application/java
+var r = vars.emailRow
+var fmt = (n) -> n as String {format: "0.##"}
+---
+{
+    orderNumber: r.order_number,
+    orderDate: r.created_at as String,
+    opportunityId: r.opportunity_id,
+    account: {
+        accountId: r.account_id,
+        accountName: r.account_name,
+        accountNumber: r.account_number default "",
+        contactName: r.contact_name default "",
+        contactEmail: r.contact_email default "",
+        contactPhone: r.contact_phone default ""
+    },
+    shippingAddress: {
+        addressLine1: r.address_line1 default "",
+        city: r.city default "",
+        state: r.state default "",
+        postalCode: r.postal_code default "",
+        country: r.country default ""
+    },
+    currency: r.currency,
+    totalAmount: fmt(r.total_amount),
+    lines: vars.orderLines map ((l) -> {
+        lineNumber: l.line_number,
+        productCode: l.product_code,
+        productName: l.product_name default "",
+        quantity: fmt(l.quantity),
+        unitPrice: fmt(l.unit_price),
+        lineTotal: fmt(l.line_total)
+    }),
+    lineCount: r.line_count,
+    correlationId: r.correlation_id
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <try doc:name="Owner lookup (best effort)">
+            <flow-ref name="sf-enrich-query-op-flow" doc:name="Look up owner email" />
+            <set-variable variableName="ownerEmail" value="#[vars.enriched[0].Owner.Email default p('notification.fulfilmentDesk')]" doc:name="Owner email for CC" />
+            <error-handler>
+                <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                    <set-variable variableName="ownerEmail" value="#[p('notification.fulfilmentDesk')]" doc:name="Owner unknown, use desk" />
+                    <logger level="WARN" doc:name="Log Owner Lookup Failed" message='#[output application/java --- "EMAIL RETRY OWNER LOOKUP FAILED corr=$(vars.corrId default "none") opp=$(vars.oppId default "none") order=$(vars.orderNumber default "none"): sending without owner CC. " ++ (error.description default "unknown")]' />
+                </on-error-continue>
+            </error-handler>
+        </try>
+        <ee:transform doc:name="Build email body">
+            <ee:message />
+            <ee:variables>
+                <ee:set-variable variableName="emailBody" resource="dwl/build-email-body.dwl" />
+            </ee:variables>
+        </ee:transform>
+        <set-variable variableName="retryOpFlow" value="send-email-op-flow" doc:name="Operation: send email" />
+        <flow-ref name="retry-flow" doc:name="Retry: send email" />
+        <db:update doc:name="Mark email SENT" config-ref="Database_Config" target="mailRetryDbResult">
+            <db:sql><![CDATA[UPDATE sales_order
+                SET order_status = CASE WHEN order_status = 'SF_UPDATED' THEN 'NOTIFIED' ELSE order_status END,
+                    email_status = 'SENT', updated_at = now()
+                WHERE order_number = :orderNumber]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+        </db:update>
+        <logger level="INFO" doc:name="Log Email Retry Sent" message='#[output application/java --- "EMAIL RETRY SENT corr=$(vars.corrId) opp=$(vars.oppId) order=$(vars.orderNumber): email_status SENT"]' />
+        <error-handler>
+            <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                <logger level="ERROR" doc:name="Log Email Retry Failed" message='#[output application/java --- "EMAIL RETRY FAILED corr=$(vars.corrId default "none") opp=$(vars.oppId default "none") order=$(vars.orderNumber default "none"): stays PENDING_RETRY, tried again next run. " ++ (error.description default "unknown")]' />
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="business-error-flow">
+        <set-variable variableName="reason255" value='#[output application/java --- do { var m = vars.businessErrorMessage default "" --- if (sizeOf(m) > 255) m[0 to 254] else m }]' doc:name="Reason (255 chars)" />
+        <set-variable variableName="reason500" value='#[output application/java --- do { var m = vars.businessErrorMessage default "" --- if (sizeOf(m) > 500) m[0 to 499] else m }]' doc:name="Reason (500 chars)" />
+        <logger level="ERROR" doc:name="Log Business Error Handling" message='#[output application/java --- "BUSINESS ERROR HANDLING corr=$(vars.corrId) opp=$(vars.oppId) code=$(vars.businessErrorCode): $(vars.reason255)"]' />
+        <db:insert doc:name="Record exception" config-ref="Database_Config" target="exceptionResult">
+            <db:sql><![CDATA[INSERT INTO order_exception (opportunity_id, order_number, error_code, error_message, correlation_id)
+                VALUES (:opportunityId, NULL, :errorCode, :errorMessage, :correlationId)]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+                opportunityId: vars.oppId,
+                errorCode: vars.businessErrorCode,
+                errorMessage: vars.reason500,
+                correlationId: vars.corrId
+            }]]]></db:input-parameters>
+        </db:insert>
+        <logger level="INFO" doc:name="Log Exception Recorded" message='#[output application/java --- "EXCEPTION RECORDED corr=$(vars.corrId) opp=$(vars.oppId) code=$(vars.businessErrorCode)"]' />
+        <salesforce:update type="Opportunity" doc:name="Mark opportunity FAILED" config-ref="Salesforce_Config" target="sfFailResult">
+            <salesforce:records><![CDATA[#[[{
+                Id: vars.oppId,
+                Integration_Status__c: "FAILED",
+                Integration_Message__c: vars.reason255
+            }]]]]></salesforce:records>
+        </salesforce:update>
+        <logger level="INFO" doc:name="Log Opportunity Failed" message='#[output application/java --- "OPPORTUNITY FAILED corr=$(vars.corrId) opp=$(vars.oppId): Integration_Status__c set to FAILED"]' />
+        <salesforce:create type="Task" doc:name="Create Task for owner" config-ref="Salesforce_Config" target="sfTaskResult">
+            <salesforce:records><![CDATA[#[output application/java --- [{
+                Subject: "Integration failed: " ++ vars.businessErrorCode,
+                WhatId: vars.oppId,
+                OwnerId: vars.enriched[0].OwnerId,
+                Description: vars.reason500,
+                Status: "Not Started",
+                Priority: "High"
+            }]]]]></salesforce:records>
+        </salesforce:create>
+        <logger level="INFO" doc:name="Log Task Result" message='#[output application/java --- "TASK RESULT corr=$(vars.corrId) opp=$(vars.oppId): " ++ write(vars.sfTaskResult, "application/json")]' />
+        <db:update doc:name="Save Task id" config-ref="Database_Config" target="taskIdResult">
+            <db:sql><![CDATA[UPDATE order_exception SET sf_task_id = :taskId WHERE correlation_id = :correlationId AND opportunity_id = :opportunityId]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+                taskId: (vars.sfTaskResult.items[0].id default ""),
+                correlationId: vars.corrId,
+                opportunityId: vars.oppId
+            }]]]></db:input-parameters>
+        </db:update>
+        <logger level="INFO" doc:name="Log Business Error Handled" message='#[output application/java --- "BUSINESS ERROR HANDLED corr=$(vars.corrId) opp=$(vars.oppId) code=$(vars.businessErrorCode)"]' />
+        <error-handler>
+            <on-error-continue type="ANY" enableNotifications="false" logException="false">
+                <logger level="ERROR" doc:name="Log Business Error Handling Failed" message='#[output application/java --- "BUSINESS ERROR HANDLING FAILED corr=$(vars.corrId) opp=$(vars.oppId): " ++ (error.description default "unknown")]' />
+            </on-error-continue>
+        </error-handler>
+    </flow>
+
+    <flow name="startup-watermark-flow">
+        <scheduler doc:name="Run at startup">
+            <scheduling-strategy>
+                <fixed-frequency frequency="86400000" startDelay="2000" />
+            </scheduling-strategy>
+        </scheduler>
+        <os:retrieve key="lastProcessedModified" objectStore="Watermark_Store" doc:name="Read watermark">
+            <os:default-value>NONE</os:default-value>
+        </os:retrieve>
+        <choice doc:name="Watermark found?">
+            <when expression="#[payload == 'NONE']">
+                <logger level="WARN" doc:name="Log No Watermark" message="WATERMARK not found - starting fresh" />
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="Log Resume" message='#["WATERMARK found - resuming after $(payload)"]' />
+            </otherwise>
+        </choice>
+    </flow>
+
+</mule>
