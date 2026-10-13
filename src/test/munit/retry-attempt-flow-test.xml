@@ -82,4 +82,75 @@
         </munit:validation>
     </munit:test>
 
+    <!-- Helper: fails once with a transient error, succeeds on the 2nd call.
+         It only READS retryAttempt. The real retry-attempt-flow does the counting. -->
+    <flow name="test-flaky-op-flow">
+        <choice>
+            <when expression="#[(vars.retryAttempt as Number) &lt; 1]">
+                <raise-error type="APP:TEST_TRANSIENT"
+                             description="Connection refused (simulated)"/>
+            </when>
+            <otherwise>
+                <logger level="INFO" message="test-flaky-op-flow: success"/>
+            </otherwise>
+        </choice>
+    </flow>
+
+    <!-- Helper: always fails with a transient error -->
+    <flow name="test-always-fails-op-flow">
+        <raise-error type="APP:TEST_TRANSIENT" description="Connection refused (simulated)"/>
+    </flow>
+
+    <!-- Test 3: one transient failure, then success -->
+    <munit:test name="retry-attempt-flow-transient-then-success-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="flow-ref">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="name"
+                                                whereValue="#['mock-operation-flow']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-call flow="test-flaky-op-flow"/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:variables>
+                    <munit:variable key="retryOpFlow" value="#['mock-operation-flow']"/>
+                    <munit:variable key="retryAttempt" value="#[0]"/>
+                </munit:variables>
+            </munit:set-event>
+            <flow-ref name="retry-attempt-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.retryStatus]" expected="#['OK']"/>
+            <munit-tools:assert-equals actual="#[vars.retryAttempt]" expected="#[1]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 4: transient failures that never stop, so retries are exhausted -->
+    <munit:test name="retry-attempt-flow-exhausted-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="flow-ref">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="name"
+                                                whereValue="#['mock-operation-flow']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-call flow="test-always-fails-op-flow"/>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:variables>
+                    <munit:variable key="retryOpFlow" value="#['mock-operation-flow']"/>
+                    <munit:variable key="retryAttempt" value="#[0]"/>
+                </munit:variables>
+            </munit:set-event>
+            <flow-ref name="retry-attempt-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.retryStatus]" expected="#['EXHAUSTED']"/>
+            <munit-tools:assert-equals actual="#[vars.retryAttempt]" expected="#[p('retry.max') as Number]"/>
+        </munit:validation>
+    </munit:test>
+
 </mule>

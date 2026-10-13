@@ -1,23 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+<mule xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
       xmlns:db="http://www.mulesoft.org/schema/mule/db"
       xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
       xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
       xmlns:email="http://www.mulesoft.org/schema/mule/email"
       xmlns:file="http://www.mulesoft.org/schema/mule/file"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
       xmlns:os="http://www.mulesoft.org/schema/mule/os"
       xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
       xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
-      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-      xsi:schemaLocation="
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="
         http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
         http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
         http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
         http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd
         http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
         http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
         http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
-        http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd">
+        http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
 
     <configuration-properties file="local.properties" />
 
@@ -32,12 +35,16 @@
         </vm:queues>
     </vm:config>
 
+    <http:request-config name="Order_System_API_Config" doc:name="Order System API Config">
+        <http:request-connection host="${orders.api.host}" port="${orders.api.port}" />
+    </http:request-config>
+
     <db:config name="Database_Config" doc:name="Database Config">
         <db:generic-connection
             url="jdbc:postgresql://${db.host}:${db.port}/${db.name}"
             driverClassName="org.postgresql.Driver"
             user="${db.user}"
-            password="${db.password}" />
+            password="${secure::db.password}" />
     </db:config>
 
     <file:config name="File_Config" doc:name="File Config">
@@ -45,16 +52,20 @@
     </file:config>
 
     <email:smtp-config name="Email_SMTP_Config" doc:name="Email SMTP Config">
-        <email:smtp-connection host="${smtp.host}" port="${smtp.port}" user="${smtp.user}" password="${smtp.password}" />
+        <email:smtp-connection host="${smtp.host}" port="${smtp.port}" user="${smtp.user}" password="${secure::smtp.password}" />
     </email:smtp-config>
 
     <salesforce:sfdc-config name="Salesforce_Config">
         <salesforce:basic-connection
             username="${sf.username}"
-            password="${sf.password}"
-            securityToken="${sf.token}"
+            password="${secure::sf.password}"
+            securityToken="${secure::sf.token}"
             url="https://login.salesforce.com/services/Soap/u/64.0"/>
     </salesforce:sfdc-config>
+
+    <secure-properties:config name="Secure_Props" doc:name="Secure Properties Config" doc:id="9dceb433-ffd8-418f-8f95-9a4a4c17249b" file="secure.properties" key="${secure.key}" >
+        <secure-properties:encrypt algorithm="Blowfish" mode="CBC" useRandomIVs="true" />
+    </secure-properties:config>
 
     <flow name="sf-opportunity-listener-flow">
         <salesforce:modified-object-listener
@@ -256,115 +267,129 @@
         </choice>
     </flow>
 
-    
-<flow name="retry-attempt-flow">
-    <try doc:name="Attempt operation">
+    <flow name="retry-attempt-flow">
 
-        <flow-ref name="#[vars.retryOpFlow]" doc:name="Run operation"/>
+        <set-variable variableName="retryAgain"
+                      value="#[false]"
+                      doc:name="Reset retry flag"/>
 
-        <set-variable variableName="retryStatus"
-                      value="#['OK']"
-                      doc:name="Status OK"/>
+        <try doc:name="Attempt operation">
 
-        <error-handler>
-            <on-error-continue type="ANY"
-                               enableNotifications="false"
-                               logException="false">
+            <flow-ref name="#[vars.retryOpFlow]" doc:name="Run operation"/>
 
-                <set-variable variableName="retryError"
-                    value="#[output application/java --- do { var m = (error.description default 'Unknown error') as String --- if (sizeOf(m) > 500) m[0 to 499] else m }]"
-                    doc:name="Keep error reason"/>
+            <set-variable variableName="retryStatus"
+                          value="#['OK']"
+                          doc:name="Status OK"/>
 
-                <set-variable variableName="retryErrorType"
-                    value="#[upper((error.errorType.namespace default '') as String) ++ ':' ++ upper((error.errorType.identifier default '') as String)]"
-                    doc:name="Keep error type"/>
+            <error-handler>
+                <on-error-continue type="ANY"
+                                   enableNotifications="false"
+                                   logException="false">
 
-                <set-variable variableName="retryIsAuth"
-    value="#[(['sf-enrich-query-op-flow', 'sf-writeback-op-flow'] contains (vars.retryOpFlow default '')) and ((lower(vars.retryError default '') contains 'invalid_login') or (lower(vars.retryError default '') contains 'invalid_session_id') or (lower(vars.retryError default '') contains 'invalid username, password') or (lower(vars.retryError default '') contains 'session expired') or (lower(vars.retryError default '') contains 'unauthorized') or (lower(vars.retryError default '') contains 'authentication') or (lower(vars.retryError default '') contains 'login_must_use_security_token') or (lower(vars.retryError default '') contains 'invalid_grant'))]"
-    doc:name="Detect Salesforce authentication error"/>
+                    <set-variable variableName="retryError"
+                        value="#[output application/java --- do { var m = (error.description default 'Unknown error') as String --- if (sizeOf(m) > 500) m[0 to 499] else m }]"
+                        doc:name="Keep error reason"/>
 
-                <set-variable variableName="retryableError"
-    value="#[(lower(vars.retryError default '') contains 'unable_to_lock_row') or (lower(vars.retryError default '') contains 'request_limit_exceeded') or (lower(vars.retryError default '') contains 'too many requests') or (lower(vars.retryError default '') contains 'timeout') or (lower(vars.retryError default '') contains 'timed out') or (lower(vars.retryError default '') contains 'connection reset') or (lower(vars.retryError default '') contains 'connection refused') or (lower(vars.retryError default '') contains 'broken pipe') or (lower(vars.retryError default '') contains 'temporarily unavailable') or (lower(vars.retryError default '') contains 'service unavailable') or (lower(vars.retryError default '') contains 'could not connect') or (lower(vars.retryError default '') contains 'deadlock detected') or (lower(vars.retryError default '') contains 'could not serialize access') or (lower(vars.retryError default '') contains 'http 429') or (lower(vars.retryError default '') contains 'http 502') or (lower(vars.retryError default '') contains 'http 503') or (lower(vars.retryError default '') contains 'http 504') or (lower(vars.retryErrorType default '') contains 'timeout') or (lower(vars.retryErrorType default '') contains 'connectivity')]"
-    doc:name="Detect transient error"/>
+                    <set-variable variableName="retryErrorType"
+                        value="#[upper((error.errorType.namespace default '') as String) ++ ':' ++ upper((error.errorType.identifier default '') as String)]"
+                        doc:name="Keep error type"/>
 
-                <choice doc:name="Classify error">
+                    <set-variable variableName="retryIsAuth"
+        value="#[(['sf-enrich-query-op-flow', 'sf-writeback-op-flow'] contains (vars.retryOpFlow default '')) and ((lower(vars.retryError default '') contains 'invalid_login') or (lower(vars.retryError default '') contains 'invalid_session_id') or (lower(vars.retryError default '') contains 'invalid username, password') or (lower(vars.retryError default '') contains 'session expired') or (lower(vars.retryError default '') contains 'unauthorized') or (lower(vars.retryError default '') contains 'authentication') or (lower(vars.retryError default '') contains 'login_must_use_security_token') or (lower(vars.retryError default '') contains 'invalid_grant'))]"
+        doc:name="Detect Salesforce authentication error"/>
 
-                    <when expression="#[vars.retryIsAuth and not (vars.authRetried default false)]">
-                        <set-variable variableName="authRetried"
-                                      value="#[true]"
-                                      doc:name="Allow one auth retry"/>
+                    <set-variable variableName="retryableError"
+        value="#[(lower(vars.retryError default '') contains 'unable_to_lock_row') or (lower(vars.retryError default '') contains 'request_limit_exceeded') or (lower(vars.retryError default '') contains 'too many requests') or (lower(vars.retryError default '') contains 'timeout') or (lower(vars.retryError default '') contains 'timed out') or (lower(vars.retryError default '') contains 'connection reset') or (lower(vars.retryError default '') contains 'connection refused') or (lower(vars.retryError default '') contains 'broken pipe') or (lower(vars.retryError default '') contains 'temporarily unavailable') or (lower(vars.retryError default '') contains 'service unavailable') or (lower(vars.retryError default '') contains 'could not connect') or (lower(vars.retryError default '') contains 'deadlock detected') or (lower(vars.retryError default '') contains 'could not serialize access') or (lower(vars.retryError default '') contains 'http 429') or (lower(vars.retryError default '') contains 'http 502') or (lower(vars.retryError default '') contains 'http 503') or (lower(vars.retryError default '') contains 'http 504') or (lower(vars.retryErrorType default '') contains 'timeout') or (lower(vars.retryErrorType default '') contains 'connectivity')]"
+        doc:name="Detect transient error"/>
 
-                        <logger level="WARN"
-                            message="#['Salesforce authentication error; retrying operation once. This does not guarantee session refresh. Reason: ' ++ vars.retryError]"
-                            doc:name="Log authentication retry"/>
+                    <choice doc:name="Classify error">
 
-                        <flow-ref name="retry-attempt-flow"
-                                  doc:name="Retry Salesforce operation once"/>
-                    </when>
+                        <when expression="#[vars.retryIsAuth and not (vars.authRetried default false)]">
+                            <set-variable variableName="authRetried"
+                                          value="#[true]"
+                                          doc:name="Allow one auth retry"/>
 
-                    <when expression="#[vars.retryIsAuth]">
-                        <set-variable variableName="retryStatus"
-                                      value="#['AUTH_FAILED']"
-                                      doc:name="Stop after auth failure"/>
+                            <logger level="WARN"
+                                message="#['Salesforce authentication error; retrying operation once. This does not guarantee session refresh. Reason: ' ++ vars.retryError]"
+                                doc:name="Log authentication retry"/>
 
-                        <logger level="ERROR"
-                            message="#['Salesforce authentication retry failed. Manual authentication/configuration check required. Reason: ' ++ vars.retryError]"
-                            doc:name="Log auth failure"/>
-                    </when>
+                            <set-variable variableName="retryAgain"
+                                          value="#[true]"
+                                          doc:name="Retry after this scope"/>
+                        </when>
 
-                    <when expression="#[not vars.retryableError]">
-                        <set-variable variableName="retryStatus"
-                                      value="#['PERMANENT']"
-                                      doc:name="Stop on permanent or unknown error"/>
+                        <when expression="#[vars.retryIsAuth]">
+                            <set-variable variableName="retryStatus"
+                                          value="#['AUTH_FAILED']"
+                                          doc:name="Stop after auth failure"/>
 
-                        <logger level="ERROR"
-                            message="#['Not retrying permanent or unclassified error. Type: ' ++ vars.retryErrorType ++ ', reason: ' ++ vars.retryError]"
-                            doc:name="Log non-retryable error"/>
-                    </when>
+                            <logger level="ERROR"
+                                message="#['Salesforce authentication retry failed. Manual authentication/configuration check required. Reason: ' ++ vars.retryError]"
+                                doc:name="Log auth failure"/>
+                        </when>
 
-                    <when expression="#[(vars.retryAttempt as Number) >= (p('retry.max') as Number)]">
-                        <set-variable variableName="retryStatus"
-                                      value="#['EXHAUSTED']"
-                                      doc:name="Mark retries exhausted"/>
+                        <when expression="#[not vars.retryableError]">
+                            <set-variable variableName="retryStatus"
+                                          value="#['PERMANENT']"
+                                          doc:name="Stop on permanent or unknown error"/>
 
-                        <logger level="ERROR"
-                            message="#['Retries exhausted. Operation: ' ++ (vars.retryOpFlow default 'unknown') ++ ', attempts: ' ++ ((vars.retryAttempt as Number) + 1) ++ ', reason: ' ++ vars.retryError]"
-                            doc:name="Log retries exhausted"/>
-                    </when>
+                            <logger level="ERROR"
+                                message="#['Not retrying permanent or unclassified error. Type: ' ++ vars.retryErrorType ++ ', reason: ' ++ vars.retryError]"
+                                doc:name="Log non-retryable error"/>
+                        </when>
 
-                    <otherwise>
-                        <set-variable variableName="retryDelayMs"
-    value="#[(p('retry.delay.ms') as Number) * ([1, 2, 4, 8, 16, 32][(vars.retryAttempt default 0) as Number] default 32)]"
-    doc:name="Calculate exponential backoff"/>
+                        <when expression="#[(vars.retryAttempt as Number) >= (p('retry.max') as Number)]">
+                            <set-variable variableName="retryStatus"
+                                          value="#['EXHAUSTED']"
+                                          doc:name="Mark retries exhausted"/>
 
-                        <logger level="WARN"
-                            message="#['Transient error. Retrying operation ' ++ (vars.retryOpFlow default 'unknown') ++ ' after ' ++ (vars.retryDelayMs as String) ++ ' ms. Retry number: ' ++ ((vars.retryAttempt as Number) + 1) ++ '. Reason: ' ++ vars.retryError]"
-                            doc:name="Log retry"/>
+                            <logger level="ERROR"
+                                message="#['Retries exhausted. Operation: ' ++ (vars.retryOpFlow default 'unknown') ++ ', attempts: ' ++ ((vars.retryAttempt as Number) + 1) ++ ', reason: ' ++ vars.retryError]"
+                                doc:name="Log retries exhausted"/>
+                        </when>
 
-                        <ee:transform doc:name="Backoff pause">
-                            <ee:message/>
-                            <ee:variables>
-                                <ee:set-variable variableName="retryPause"><![CDATA[%dw 2.0
+                        <otherwise>
+                            <set-variable variableName="retryDelayMs"
+        value="#[(p('retry.delay.ms') as Number) * ([1, 2, 4, 8, 16, 32][(vars.retryAttempt default 0) as Number] default 32)]"
+        doc:name="Calculate exponential backoff"/>
+
+                            <logger level="WARN"
+                                message="#['Transient error. Retrying operation ' ++ (vars.retryOpFlow default 'unknown') ++ ' after ' ++ (vars.retryDelayMs as String) ++ ' ms. Retry number: ' ++ ((vars.retryAttempt as Number) + 1) ++ '. Reason: ' ++ vars.retryError]"
+                                doc:name="Log retry"/>
+
+                            <ee:transform doc:name="Backoff pause">
+                                <ee:message/>
+                                <ee:variables>
+                                    <ee:set-variable variableName="retryPause"><![CDATA[%dw 2.0
 import java!java::lang::Thread
 output application/java
 ---
 Thread::sleep(vars.retryDelayMs as Number)]]></ee:set-variable>
-                            </ee:variables>
-                        </ee:transform>
+                                </ee:variables>
+                            </ee:transform>
 
-                        <set-variable variableName="retryAttempt"
-                            value="#[(vars.retryAttempt as Number) + 1]"
-                            doc:name="Increment retry counter"/>
+                            <set-variable variableName="retryAttempt"
+                                value="#[(vars.retryAttempt as Number) + 1]"
+                                doc:name="Increment retry counter"/>
 
-                        <flow-ref name="retry-attempt-flow"
-                                  doc:name="Retry transient failure"/>
-                    </otherwise>
+                            <set-variable variableName="retryAgain"
+                                          value="#[true]"
+                                          doc:name="Retry after this scope"/>
+                        </otherwise>
 
-                </choice>
-            </on-error-continue>
-        </error-handler>
-    </try>
-</flow>
+                    </choice>
+                </on-error-continue>
+            </error-handler>
+        </try>
+
+        <choice doc:name="Retry again?">
+            <when expression="#[vars.retryAgain == true]">
+                <flow-ref name="retry-attempt-flow"
+                          doc:name="Retry operation"/>
+            </when>
+        </choice>
+
+    </flow>
 
     <flow name="sf-enrich-query-op-flow">
         <salesforce:query doc:name="Query opportunity details" config-ref="Salesforce_Config" target="enriched">
@@ -374,76 +399,31 @@ Thread::sleep(vars.retryDelayMs as Number)]]></ee:set-variable>
     </flow>
 
     <flow name="order-number-op-flow">
-        <db:select doc:name="Get next order number" config-ref="Database_Config" target="orderNumber" targetValue="#[payload[0].order_number]">
-            <db:sql><![CDATA[SELECT 'ERP-' || to_char(now(), 'YYYY') || '-' || LPAD(CAST(nextval('order_number_seq') AS TEXT), 6, '0') AS order_number]]></db:sql>
-        </db:select>
+        <http:request method="POST" path="/api/order-numbers" config-ref="Order_System_API_Config" doc:name="System API: next order number" target="orderNumber" targetValue="#[payload.orderNumber]">
+            <http:body><![CDATA[#[null]]]></http:body>
+        </http:request>
     </flow>
 
     <flow name="persist-order-flow">
         <set-variable variableName="persistResult" value="FAILED" doc:name="Reset result" />
-        <try transactionalAction="ALWAYS_BEGIN" doc:name="Transaction: header and lines">
-            <db:insert doc:name="Insert order header" config-ref="Database_Config" target="headerResult">
-                <db:sql><![CDATA[INSERT INTO sales_order
-                    (order_number, opportunity_id, account_id, account_name, account_number,
-                     contact_name, contact_email, contact_phone,
-                     address_line1, city, state, postal_code, country,
-                     currency, total_amount, line_count, order_status, sf_last_modified, correlation_id)
-                    VALUES
-                    (:orderNumber, :opportunityId, :accountId, :accountName, :accountNumber,
-                     :contactName, :contactEmail, :contactPhone,
-                     :addressLine1, :city, :state, :postalCode, :country,
-                     :currency, :totalAmount, :lineCount, :orderStatus, CAST(:lastModified AS TIMESTAMP), :correlationId)]]></db:sql>
-                <db:input-parameters><![CDATA[#[{
-                    orderNumber: vars.canonicalOrder.orderNumber,
-                    opportunityId: vars.canonicalOrder.opportunityId,
-                    accountId: vars.canonicalOrder.account.accountId,
-                    accountName: vars.canonicalOrder.account.accountName,
-                    accountNumber: vars.canonicalOrder.account.accountNumber,
-                    contactName: vars.canonicalOrder.account.contactName,
-                    contactEmail: vars.canonicalOrder.account.contactEmail,
-                    contactPhone: vars.canonicalOrder.account.contactPhone,
-                    addressLine1: vars.canonicalOrder.shippingAddress.addressLine1,
-                    city: vars.canonicalOrder.shippingAddress.city,
-                    state: vars.canonicalOrder.shippingAddress.state,
-                    postalCode: vars.canonicalOrder.shippingAddress.postalCode,
-                    country: vars.canonicalOrder.shippingAddress.country,
-                    currency: vars.canonicalOrder.currency,
-                    totalAmount: vars.canonicalOrder.totalAmount,
-                    lineCount: vars.canonicalOrder.lineCount,
-                    orderStatus: vars.canonicalOrder.orderStatus,
-                    lastModified: (vars.enriched[0].LastModifiedDate as DateTime) as String {format: "yyyy-MM-dd HH:mm:ss"},
-                    correlationId: vars.canonicalOrder.correlationId
-                }]]]></db:input-parameters>
-            </db:insert>
-            <foreach collection="#[vars.canonicalOrder.lines]" doc:name="For each line">
-                <db:insert doc:name="Insert order line" config-ref="Database_Config" target="lineResult">
-                    <db:sql><![CDATA[INSERT INTO sales_order_line
-                        (order_number, line_number, product_code, product_name, quantity, unit_price, line_total)
-                        VALUES (:orderNumber, :lineNumber, :productCode, :productName, :quantity, :unitPrice, :lineTotal)]]></db:sql>
-                    <db:input-parameters><![CDATA[#[{
-                        orderNumber: vars.canonicalOrder.orderNumber,
-                        lineNumber: payload.lineNumber,
-                        productCode: payload.productCode,
-                        productName: payload.productName,
-                        quantity: payload.quantity,
-                        unitPrice: payload.unitPrice,
-                        lineTotal: payload.lineTotal
-                    }]]]></db:input-parameters>
-                </db:insert>
-            </foreach>
-        </try>
-        <set-variable variableName="newStatus" value="PERSISTED" doc:name="Status PERSISTED" />
-        <flow-ref name="update-order-status-flow" doc:name="Update status" />
-        <set-variable variableName="persistResult" value="OK" doc:name="Result OK" />
-        <error-handler>
-            <on-error-continue type="DB:QUERY_EXECUTION"
-    when="#[lower(error.description default '') contains 'duplicate key']"
-    enableNotifications="false"
-    logException="false">
+        <http:request method="POST" path="/api/orders" config-ref="Order_System_API_Config" doc:name="System API: create order" target="persistResponse" targetValue="#[message]">
+            <http:body><![CDATA[#[output application/json skipNullOn="everywhere" ---
+vars.canonicalOrder ++ { sfLastModified: (vars.enriched[0].LastModifiedDate as DateTime) as String }]]]></http:body>
+            <http:response-validator>
+                <http:success-status-code-validator values="0..399,409" />
+            </http:response-validator>
+        </http:request>
+        <choice doc:name="Duplicate order?">
+            <when expression="#[vars.persistResponse.attributes.statusCode == 409]">
                 <set-variable variableName="persistResult" value="DUPLICATE" doc:name="Result DUPLICATE" />
                 <logger level="WARN" doc:name="Log Duplicate Order" message='#[output application/java --- "DUPLICATE ORDER corr=$(vars.corrId) opp=$(vars.oppId): an order already exists for this opportunity, nothing created"]' />
-            </on-error-continue>
-        </error-handler>
+            </when>
+            <otherwise>
+                <set-variable variableName="newStatus" value="PERSISTED" doc:name="Status PERSISTED" />
+                <flow-ref name="update-order-status-flow" doc:name="Update status" />
+                <set-variable variableName="persistResult" value="OK" doc:name="Result OK" />
+            </otherwise>
+        </choice>
     </flow>
 
     <flow name="update-order-status-flow">

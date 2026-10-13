@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd ">
+
+    <configuration-properties file="local.properties" />
+
+    <db:config name="Database_Config" doc:name="Database Config">
+        <db:generic-connection
+            url="jdbc:postgresql://${db.host}:${db.port}/${db.name}"
+            driverClassName="org.postgresql.Driver"
+            user="${db.user}"
+            password="${db.password}" />
+    </db:config>
+
+    <configuration defaultErrorHandler-ref="Global_Error_Handler" doc:name="Configuration" />
+
+    <error-handler name="Global_Error_Handler">
+        <on-error-propagate type="ANY" enableNotifications="false" logException="false">
+            <flow-ref name="system-error-response-sub-flow" doc:name="Build system error response" />
+        </on-error-propagate>
+    </error-handler>
+
+    <sub-flow name="system-error-response-sub-flow">
+        <logger level="ERROR" doc:name="Log System Error" message='#[output application/java --- "SYSTEM API ERROR corr=$(vars.corrId default correlationId) type=$(error.errorType.namespace default ""):$(error.errorType.identifier default ""): $(error.description default "unknown")"]' />
+        <ee:transform doc:name="Build 500 response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    code: "SYSTEM_ERROR",
+    message: "The order service could not complete the request",
+    correlationId: vars.corrId default correlationId
+}]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="httpStatus">500</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+    </sub-flow>
+
+    <http:listener-config name="order-system-api-httpListenerConfig">
+        <http:listener-connection host="0.0.0.0" port="${http.port}" />
+    </http:listener-config>
+    <apikit:config name="order-system-api-config" api="order-system-api.raml" outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus" />
+
+    <flow name="order-system-api-main">
+        <http:listener config-ref="order-system-api-httpListenerConfig" path="/api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:router config-ref="order-system-api-config" />
+        <error-handler>
+            <on-error-propagate type="APIKIT:BAD_REQUEST">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Bad request"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_FOUND">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Resource not found"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Method not allowed"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">405</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_ACCEPTABLE">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Not acceptable"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">406</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:UNSUPPORTED_MEDIA_TYPE">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Unsupported media type"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">415</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="APIKIT:NOT_IMPLEMENTED">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Not Implemented"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">501</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <flow name="order-system-api-console">
+        <http:listener config-ref="order-system-api-httpListenerConfig" path="/console/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <apikit:console config-ref="order-system-api-config" />
+        <error-handler>
+            <on-error-propagate type="APIKIT:NOT_FOUND">
+                <ee:transform doc:name="Transform Message">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{message: "Resource not found"}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <flow name="post:\order-numbers:order-system-api-config">
+        <set-variable variableName="corrId" value="#[attributes.headers.'x-correlation-id' default correlationId]" doc:name="Set corrId" />
+        <logger level="INFO" doc:name="Log Entry" message='#[output application/java --- "ORDER NUMBER REQUEST corr=$(vars.corrId)"]' />
+        <db:select doc:name="Next order number" config-ref="Database_Config">
+            <db:sql><![CDATA[SELECT 'ERP-' || to_char(now(), 'YYYY') || '-' || LPAD(CAST(nextval('order_number_seq') AS TEXT), 6, '0') AS order_number]]></db:sql>
+        </db:select>
+        <ee:transform doc:name="Build response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ orderNumber: payload[0].order_number }]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="httpStatus">201</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <logger level="INFO" doc:name="Log Exit" message='#[output application/java --- "ORDER NUMBER RESERVED corr=$(vars.corrId) order=$(payload.orderNumber)"]' />
+    </flow>
+
+    <flow name="post:\orders:application\json:order-system-api-config">
+        <!-- FIX: explicit Java output. payload is JSON and the correlationId binding is Java, so DataWeave could not infer one output type. -->
+        <set-variable variableName="corrId" value="#[output application/java --- payload.correlationId default correlationId]" doc:name="Set corrId" />
+        <set-variable variableName="order" value="#[payload]" doc:name="Keep order" />
+        <logger level="INFO" doc:name="Log Entry" message='#[output application/java --- "CREATE ORDER corr=$(vars.corrId) opp=$(vars.order.opportunityId) order=$(vars.order.orderNumber) lines=$(sizeOf(vars.order.lines default []))"]' />
+        <choice doc:name="Has lines and matching count?">
+            <when expression="#[isEmpty(vars.order.lines default []) or sizeOf(vars.order.lines) != vars.order.lineCount]">
+                <logger level="WARN" doc:name="Log Invalid Order" message='#[output application/java --- "INVALID ORDER REJECTED corr=$(vars.corrId) opp=$(vars.order.opportunityId): no lines, or lineCount does not match the lines"]' />
+                <ee:transform doc:name="Build 400 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    code: "INVALID_ORDER",
+    message: "An order needs at least one line, and lineCount must match the number of lines",
+    correlationId: vars.corrId
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">400</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <otherwise>
+                <try transactionalAction="ALWAYS_BEGIN" doc:name="Transaction: header and lines">
+                    <db:insert doc:name="Insert order header" config-ref="Database_Config" target="headerResult">
+                        <db:sql><![CDATA[INSERT INTO sales_order
+                            (order_number, opportunity_id, account_id, account_name, account_number,
+                             contact_name, contact_email, contact_phone,
+                             address_line1, city, state, postal_code, country,
+                             currency, total_amount, line_count, order_status, sf_last_modified, correlation_id)
+                            VALUES
+                            (:orderNumber, :opportunityId, :accountId, :accountName, :accountNumber,
+                             :contactName, :contactEmail, :contactPhone,
+                             :addressLine1, :city, :state, :postalCode, :country,
+                             :currency, :totalAmount, :lineCount, :orderStatus, CAST(:lastModified AS TIMESTAMP), :correlationId)]]></db:sql>
+                        <db:input-parameters><![CDATA[#[{
+                            orderNumber: vars.order.orderNumber,
+                            opportunityId: vars.order.opportunityId,
+                            accountId: vars.order.account.accountId,
+                            accountName: vars.order.account.accountName,
+                            accountNumber: vars.order.account.accountNumber,
+                            contactName: vars.order.account.contactName,
+                            contactEmail: vars.order.account.contactEmail,
+                            contactPhone: vars.order.account.contactPhone,
+                            addressLine1: vars.order.shippingAddress.addressLine1,
+                            city: vars.order.shippingAddress.city,
+                            state: vars.order.shippingAddress.state,
+                            postalCode: vars.order.shippingAddress.postalCode,
+                            country: vars.order.shippingAddress.country,
+                            currency: vars.order.currency,
+                            totalAmount: vars.order.totalAmount,
+                            lineCount: vars.order.lineCount,
+                            orderStatus: vars.order.orderStatus,
+                            lastModified: (vars.order.sfLastModified as DateTime) as String {format: "yyyy-MM-dd HH:mm:ss"},
+                            correlationId: vars.order.correlationId
+                        }]]]></db:input-parameters>
+                    </db:insert>
+                    <foreach collection="#[vars.order.lines]" doc:name="For each line">
+                        <db:insert doc:name="Insert order line" config-ref="Database_Config" target="lineResult">
+                            <db:sql><![CDATA[INSERT INTO sales_order_line
+                                (order_number, line_number, product_code, product_name, quantity, unit_price, line_total)
+                                VALUES (:orderNumber, :lineNumber, :productCode, :productName, :quantity, :unitPrice, :lineTotal)]]></db:sql>
+                            <db:input-parameters><![CDATA[#[{
+                                orderNumber: vars.order.orderNumber,
+                                lineNumber: payload.lineNumber,
+                                productCode: payload.productCode,
+                                productName: payload.productName,
+                                quantity: payload.quantity,
+                                unitPrice: payload.unitPrice,
+                                lineTotal: payload.lineTotal
+                            }]]]></db:input-parameters>
+                        </db:insert>
+                    </foreach>
+                </try>
+                <ee:transform doc:name="Build 201 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ orderNumber: vars.order.orderNumber, orderStatus: vars.order.orderStatus }]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">201</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+                <logger level="INFO" doc:name="Log Exit" message='#[output application/java --- "ORDER CREATED corr=$(vars.corrId) opp=$(vars.order.opportunityId) order=$(vars.order.orderNumber)"]' />
+            </otherwise>
+        </choice>
+        <error-handler>
+            <on-error-propagate type="DB:QUERY_EXECUTION" when='#[lower(error.description default "") contains "duplicate key"]' enableNotifications="false" logException="false">
+                <logger level="WARN" doc:name="Log Duplicate Order" message='#[output application/java --- "DUPLICATE ORDER REJECTED corr=$(vars.corrId) opp=$(vars.order.opportunityId): an order already exists for this opportunity, nothing created"]' />
+                <ee:transform doc:name="Build 409 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    code: "DUPLICATE_ORDER",
+    message: "An order already exists for this opportunity",
+    correlationId: vars.corrId
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">409</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </on-error-propagate>
+            <on-error-propagate type="ANY" enableNotifications="false" logException="false">
+                <flow-ref name="system-error-response-sub-flow" doc:name="Build system error response" />
+            </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <flow name="get:\orders:order-system-api-config">
+        <set-variable variableName="corrId" value="#[attributes.headers.'x-correlation-id' default correlationId]" doc:name="Set corrId" />
+        <logger level="INFO" doc:name="Log Entry" message='#[output application/java --- "LIST ORDERS corr=$(vars.corrId)"]' />
+        <db:select doc:name="Select orders" config-ref="Database_Config">
+            <db:sql><![CDATA[SELECT order_number, opportunity_id, account_name, currency, total_amount, line_count,
+                    order_status, file_name, file_status, sf_update_status, email_status, correlation_id, created_at, updated_at
+                FROM sales_order
+                WHERE (:opportunityId = '' OR opportunity_id = :opportunityId)
+                  AND (:orderStatus = '' OR order_status = :orderStatus)
+                  AND (:emailStatus = '' OR email_status = :emailStatus)
+                  AND (:fileStatus = '' OR file_status = :fileStatus)
+                ORDER BY created_at DESC
+                LIMIT :limit]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+                opportunityId: attributes.queryParams.opportunityId default "",
+                orderStatus: attributes.queryParams.orderStatus default "",
+                emailStatus: attributes.queryParams.emailStatus default "",
+                fileStatus: attributes.queryParams.fileStatus default "",
+                limit: (attributes.queryParams.limit default "50") as Number
+            }]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="Build list response">
+            <ee:message>
+                <ee:set-payload resource="dwl/orders-list-response.dwl" />
+            </ee:message>
+        </ee:transform>
+        <logger level="INFO" doc:name="Log Exit" message='#[output application/java --- "LIST ORDERS DONE corr=$(vars.corrId) count=$(sizeOf(payload))"]' />
+    </flow>
+
+    <flow name="get:\orders\(orderNumber):order-system-api-config">
+        <ee:transform doc:name="Transform Message">
+            <ee:variables>
+                <ee:set-variable variableName="orderNumber">attributes.uriParams.'orderNumber'</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <set-variable variableName="corrId" value="#[attributes.headers.'x-correlation-id' default correlationId]" doc:name="Set corrId" />
+        <logger level="INFO" doc:name="Log Entry" message='#[output application/java --- "GET ORDER corr=$(vars.corrId) order=$(vars.orderNumber)"]' />
+        <db:select doc:name="Select order header" config-ref="Database_Config" target="orderRows">
+            <db:sql><![CDATA[SELECT * FROM sales_order WHERE order_number = :orderNumber]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+        </db:select>
+        <choice doc:name="Order found?">
+            <when expression="#[isEmpty(vars.orderRows)]">
+                <logger level="WARN" doc:name="Log Not Found" message='#[output application/java --- "ORDER NOT FOUND corr=$(vars.corrId) order=$(vars.orderNumber)"]' />
+                <ee:transform doc:name="Build 404 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    code: "ORDER_NOT_FOUND",
+    message: "No order with this number",
+    correlationId: vars.corrId
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <otherwise>
+                <db:select doc:name="Select order lines" config-ref="Database_Config" target="orderLines">
+                    <db:sql><![CDATA[SELECT line_number, product_code, product_name, quantity, unit_price, line_total
+                        FROM sales_order_line WHERE order_number = :orderNumber ORDER BY line_number]]></db:sql>
+                    <db:input-parameters><![CDATA[#[{ orderNumber: vars.orderNumber }]]]></db:input-parameters>
+                </db:select>
+                <ee:transform doc:name="Build order response">
+                    <ee:message>
+                        <ee:set-payload resource="dwl/order-detail-response.dwl" />
+                    </ee:message>
+                </ee:transform>
+                <logger level="INFO" doc:name="Log Exit" message='#[output application/java --- "GET ORDER DONE corr=$(vars.corrId) order=$(vars.orderNumber) lines=$(sizeOf(vars.orderLines))"]' />
+            </otherwise>
+        </choice>
+    </flow>
+
+    <flow name="patch:\orders\(orderNumber):application\json:order-system-api-config">
+        <ee:transform doc:name="Transform Message">
+            <ee:variables>
+                <ee:set-variable variableName="orderNumber">attributes.uriParams.'orderNumber'</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <set-variable variableName="corrId" value="#[attributes.headers.'x-correlation-id' default correlationId]" doc:name="Set corrId" />
+        <set-variable variableName="patch" value="#[payload]" doc:name="Keep patch" />
+        <logger level="INFO" doc:name="Log Entry" message='#[output application/java --- "UPDATE ORDER corr=$(vars.corrId) order=$(vars.orderNumber)"]' />
+        <db:update doc:name="Update order" config-ref="Database_Config">
+            <db:sql><![CDATA[UPDATE sales_order
+                SET order_status = CASE WHEN :orderStatus = '' THEN order_status ELSE :orderStatus END,
+                    file_name = CASE WHEN :fileName = '' THEN file_name ELSE :fileName END,
+                    file_status = CASE WHEN :fileStatus = '' THEN file_status ELSE :fileStatus END,
+                    email_status = CASE WHEN :emailStatus = '' THEN email_status ELSE :emailStatus END,
+                    sf_update_status = CASE WHEN :sfUpdateStatus = '' THEN sf_update_status ELSE :sfUpdateStatus END,
+                    updated_at = now()
+                WHERE order_number = :orderNumber]]></db:sql>
+            <!-- FIX: explicit Java output. vars.patch is JSON and vars.orderNumber is Java. -->
+            <db:input-parameters><![CDATA[#[output application/java --- {
+                orderStatus: vars.patch.orderStatus default "",
+                fileName: vars.patch.fileName default "",
+                fileStatus: vars.patch.fileStatus default "",
+                emailStatus: vars.patch.emailStatus default "",
+                sfUpdateStatus: vars.patch.sfUpdateStatus default "",
+                orderNumber: vars.orderNumber
+            }]]]></db:input-parameters>
+        </db:update>
+        <choice doc:name="Order found?">
+            <when expression="#[payload.affectedRows == 0]">
+                <logger level="WARN" doc:name="Log Not Found" message='#[output application/java --- "ORDER NOT FOUND corr=$(vars.corrId) order=$(vars.orderNumber)"]' />
+                <ee:transform doc:name="Build 404 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    code: "ORDER_NOT_FOUND",
+    message: "No order with this number",
+    correlationId: vars.corrId
+}]]></ee:set-payload>
+                    </ee:message>
+                    <ee:variables>
+                        <ee:set-variable variableName="httpStatus">404</ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+            </when>
+            <otherwise>
+                <ee:transform doc:name="Build 200 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ orderNumber: vars.orderNumber, updated: true }]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+                <logger level="INFO" doc:name="Log Exit" message='#[output application/java --- "ORDER UPDATED corr=$(vars.corrId) order=$(vars.orderNumber)"]' />
+            </otherwise>
+        </choice>
+    </flow>
+
+</mule>

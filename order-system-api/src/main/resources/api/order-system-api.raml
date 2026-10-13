@@ -1,0 +1,164 @@
+#%RAML 1.0
+title: Order System API
+version: v1
+mediaType: application/json
+description: System API over the fulfilment database. It owns the order transaction, the unique opportunity constraint and the order number sequence.
+
+types:
+  OrderLine:
+    type: object
+    properties:
+      lineNumber: integer
+      productCode: string
+      productName?: string
+      quantity: number
+      unitPrice: number
+      lineTotal: number
+  OrderAccount:
+    type: object
+    properties:
+      accountId: string
+      accountName: string
+      accountNumber?: string
+      contactName?: string
+      contactEmail?: string
+      contactPhone?: string
+  ShippingAddress:
+    type: object
+    properties:
+      addressLine1?: string
+      city?: string
+      state?: string
+      postalCode?: string
+      country?: string
+  OrderCreate:
+    type: object
+    properties:
+      orderNumber: string
+      opportunityId: string
+      currency: string
+      totalAmount: number
+      lineCount: integer
+      orderStatus: string
+      sfLastModified: string
+      correlationId: string
+      account: OrderAccount
+      shippingAddress?: ShippingAddress
+      lines: OrderLine[]
+  OrderPatch:
+    type: object
+    properties:
+      orderStatus?:
+        type: string
+        enum: [RECEIVED, VALIDATED, PERSISTED, FILE_GENERATED, SF_UPDATED, NOTIFIED]
+      fileName?: string
+      fileStatus?:
+        type: string
+        enum: [GENERATED, FILE_FAILED]
+      emailStatus?:
+        type: string
+        enum: [SENT, PENDING_RETRY]
+      sfUpdateStatus?:
+        type: string
+        enum: [SUCCESS, FAILED]
+  Error:
+    type: object
+    properties:
+      code: string
+      message: string
+      correlationId?: string
+
+/order-numbers:
+  post:
+    description: Reserves the next order number from the database sequence (ERP-yyyy-nnnnnn).
+    responses:
+      201:
+        body:
+          application/json:
+            example:
+              orderNumber: ERP-2026-000070
+
+/orders:
+  post:
+    description: Inserts the order header and all lines in one transaction.
+    body:
+      application/json:
+        type: OrderCreate
+    responses:
+      201:
+        body:
+          application/json:
+            example:
+              orderNumber: ERP-2026-000070
+              orderStatus: VALIDATED
+      409:
+        description: An order already exists for this opportunity id.
+        body:
+          application/json:
+            type: Error
+            example:
+              code: DUPLICATE_ORDER
+              message: An order already exists for this opportunity
+  get:
+    description: Lists orders, newest first.
+    queryParameters:
+      opportunityId?: string
+      orderStatus?: string
+      emailStatus?: string
+      fileStatus?: string
+      limit:
+        type: integer
+        required: false
+        default: 50
+        minimum: 1
+        maximum: 200
+    responses:
+      200:
+        body:
+          application/json:
+            example:
+              - orderNumber: ERP-2026-000070
+                opportunityId: 006gK00000PpiQPQAZ
+                orderStatus: SF_UPDATED
+                emailStatus: PENDING_RETRY
+  /{orderNumber}:
+    uriParameters:
+      orderNumber:
+        type: string
+    get:
+      description: Returns one order with its lines.
+      responses:
+        200:
+          body:
+            application/json:
+              example:
+                orderNumber: ERP-2026-000070
+                opportunityId: 006gK00000PpiQPQAZ
+                orderStatus: SF_UPDATED
+                lines: []
+        404:
+          body:
+            application/json:
+              type: Error
+              example:
+                code: ORDER_NOT_FOUND
+                message: No order with this number
+    patch:
+      description: Updates status, file and notification columns of an order.
+      body:
+        application/json:
+          type: OrderPatch
+      responses:
+        200:
+          body:
+            application/json:
+              example:
+                orderNumber: ERP-2026-000070
+                updated: true
+        404:
+          body:
+            application/json:
+              type: Error
+              example:
+                code: ORDER_NOT_FOUND
+                message: No order with this number
