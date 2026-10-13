@@ -10,11 +10,11 @@ var lineText = (o.lines map ((l) ->
 "A new order has been raised from a closed-won opportunity in Salesforce.\n\n" ++
 "Order Number: " ++ o.orderNumber ++ "\n" ++
 "Order Date: " ++ o.orderDate ++ "\n" ++
-"Account: " ++ o.account.accountName ++ " (" ++ o.account.accountNumber ++ ")\n" ++
-"Opportunity: " ++ o.opportunityId ++ "\n" ++
-"Order Value: " ++ o.currency ++ " " ++ o.totalAmount ++ "\n" ++
+"Account: " ++ (o.account.accountName default "") ++ (if (o.account.accountNumber != null) (" (" ++ o.account.accountNumber ++ ")") else "") ++ "\n" ++
+"Opportunity: " ++ (o.opportunityId default "") ++ "\n" ++
+"Order Value: " ++ (o.currency default "") ++ " " ++ (o.totalAmount default 0) ++ "\n" ++
 "Fulfilment File: " ++ (vars.finalFileName default "") ++ "\n" ++
-"Ship To: " ++ o.shippingAddress.addressLine1 ++ ", " ++ o.shippingAddress.city ++ ", " ++ o.shippingAddress.state ++ " - " ++ o.shippingAddress.postalCode ++ ", " ++ o.shippingAddress.country ++ "\n\n" ++
+"Ship To: " ++ [o.shippingAddress.addressLine1, o.shippingAddress.city, o.shippingAddress.state, o.shippingAddress.postalCode, o.shippingAddress.country] filter (!isEmpty($)) joinBy ", " ++ "\n\n" ++
 "Line Items:\n" ++ lineText ++ "\n\n" ++
 "Correlation Id: " ++ o.correlationId ++ "\n\n" ++
 "Regards,\nOrder Fulfilment Service"

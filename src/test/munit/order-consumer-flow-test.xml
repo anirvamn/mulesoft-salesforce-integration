@@ -1,0 +1,529 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:file="http://www.mulesoft.org/schema/file"
+      xmlns:email="http://www.mulesoft.org/schema/email"
+      xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/file http://www.mulesoft.org/schema/file/current/mule-file.xsd
+        http://www.mulesoft.org/schema/email http://www.mulesoft.org/schema/email/current/mule-email.xsd
+        http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd">
+
+    <munit:config name="order-consumer-flow-test-suite"/>
+
+    <!-- Test 1: Amount Mismatch routes to business-error-flow with AMOUNT_MISMATCH -->
+    <munit:test name="order-consumer-amount-mismatch-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity details']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="enriched" value='#[output application/java --- [{
+                            Id: "0067f00000Mismatch1",
+                            Name: "Amount Mismatch Test Opp",
+                            AccountId: "0017f00000Acc1",
+                            StageName: "Closed Won",
+                            Amount: 200000.0,
+                            CloseDate: "2026-09-14",
+                            OwnerId: "0057f00000Owner1",
+                            Owner: { Email: "owner@test.com" },
+                            Pricebook2Id: "01s7f00000Pb1",
+                            ERP_Order_Number__c: null,
+                            Integration_Status__c: "NOT_PROCESSED",
+                            LastModifiedDate: "2026-09-14T10:00:00.000Z",
+                            SystemModstamp: "2026-09-14T10:00:00.000Z",
+                            Account: {
+                                Name: "Acme Corp",
+                                AccountNumber: "ACC-001",
+                                ShippingStreet: "123 Market St",
+                                ShippingCity: "Bengaluru",
+                                ShippingState: "KA",
+                                ShippingPostalCode: "560001",
+                                ShippingCountry: "India"
+                            },
+                            OpportunityLineItems: [{
+                                Id: "00k7f00000Line1",
+                                Quantity: 10.0,
+                                UnitPrice: 10000.0,
+                                TotalPrice: 100000.0,
+                                Product2Id: "01t7f00000Prod1",
+                                Product2: { Name: "Motor A1", ProductCode: "MOT-A1" }
+                            }],
+                            OpportunityContactRoles: [{
+                                ContactId: "0037f00000Cont1",
+                                Contact: { Name: "John Doe", Email: "john@acme.com", Phone: "1234567890" }
+                            }]
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:insert">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="salesforce:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { success: true }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="salesforce:create">
+                <munit-tools:then-return>
+                    <munit-tools:payload value='#[output application/java --- { items: [{ id: "00T7f00000Task1", success: true }] }]'/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/java --- {
+                    correlationId: "test-corr-mismatch",
+                    source: "Salesforce_Topic",
+                    enqueuedAt: "2026-09-14T10:00:00Z",
+                    payload: {
+                        opportunityId: "0067f00000Mismatch1",
+                        accountId: "0017f00000Acc1",
+                        lastModifiedDate: "2026-09-14T10:00:00.000Z"
+                    }
+                }]' mediaType="application/java"/>
+            </munit:set-event>
+            <flow-ref name="order-consumer-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.businessErrorCode]" expected="#['AMOUNT_MISMATCH']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 2: Opportunity with no lines routes to business-error-flow with NO_LINE_ITEMS -->
+    <munit:test name="order-consumer-no-lines-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity details']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="enriched" value='#[output application/java --- [{
+                            Id: "0067f00000NoLines1",
+                            Name: "No Lines Opp",
+                            AccountId: "0017f00000Acc1",
+                            StageName: "Closed Won",
+                            Amount: 100000.0,
+                            CloseDate: "2026-09-14",
+                            OwnerId: "0057f00000Owner1",
+                            Owner: { Email: "owner@test.com" },
+                            Pricebook2Id: "01s7f00000Pb1",
+                            ERP_Order_Number__c: null,
+                            Integration_Status__c: "NOT_PROCESSED",
+                            LastModifiedDate: "2026-09-14T10:00:00.000Z",
+                            SystemModstamp: "2026-09-14T10:00:00.000Z",
+                            Account: {
+                                Name: "Acme Corp",
+                                AccountNumber: "ACC-001",
+                                ShippingStreet: "123 Market St",
+                                ShippingCity: "Bengaluru",
+                                ShippingState: "KA",
+                                ShippingPostalCode: "560001",
+                                ShippingCountry: "India"
+                            },
+                            OpportunityLineItems: [],
+                            OpportunityContactRoles: []
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:insert">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="salesforce:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { success: true }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="salesforce:create">
+                <munit-tools:then-return>
+                    <munit-tools:payload value='#[output application/java --- { items: [{ id: "00T7f00000Task1", success: true }] }]'/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/java --- {
+                    correlationId: "test-corr-no-lines",
+                    source: "Salesforce_Topic",
+                    enqueuedAt: "2026-09-14T10:00:00Z",
+                    payload: {
+                        opportunityId: "0067f00000NoLines1",
+                        accountId: "0017f00000Acc1",
+                        lastModifiedDate: "2026-09-14T10:00:00.000Z"
+                    }
+                }]' mediaType="application/java"/>
+            </munit:set-event>
+            <flow-ref name="order-consumer-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.businessErrorCode]" expected="#['NO_LINE_ITEMS']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 3: Missing reference data routes to business-error-flow with MISSING_REFERENCE_DATA -->
+    <munit:test name="order-consumer-missing-ref-data-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity details']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="enriched" value='#[output application/java --- [{
+                            Id: "0067f00000MissingRef1",
+                            Name: "Missing Ref Opp",
+                            AccountId: "0017f00000Acc1",
+                            StageName: "Closed Won",
+                            Amount: 100000.0,
+                            CloseDate: "2026-09-14",
+                            OwnerId: "0057f00000Owner1",
+                            Owner: { Email: "owner@test.com" },
+                            Pricebook2Id: null,
+                            ERP_Order_Number__c: null,
+                            Integration_Status__c: "NOT_PROCESSED",
+                            LastModifiedDate: "2026-09-14T10:00:00.000Z",
+                            SystemModstamp: "2026-09-14T10:00:00.000Z",
+                            Account: {
+                                Name: "Acme Corp",
+                                AccountNumber: "ACC-001",
+                                ShippingStreet: null,
+                                ShippingCity: "Bengaluru",
+                                ShippingState: "KA",
+                                ShippingPostalCode: "560001",
+                                ShippingCountry: "India"
+                            },
+                            OpportunityLineItems: [{
+                                Id: "00k7f00000Line1",
+                                Quantity: 10.0,
+                                UnitPrice: 10000.0,
+                                TotalPrice: 100000.0,
+                                Product2Id: "01t7f00000Prod1",
+                                Product2: { Name: "Motor A1", ProductCode: null }
+                            }],
+                            OpportunityContactRoles: []
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:insert">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="salesforce:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { success: true }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="salesforce:create">
+                <munit-tools:then-return>
+                    <munit-tools:payload value='#[output application/java --- { items: [{ id: "00T7f00000Task1", success: true }] }]'/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/java --- {
+                    correlationId: "test-corr-missing-ref",
+                    source: "Salesforce_Topic",
+                    enqueuedAt: "2026-09-14T10:00:00Z",
+                    payload: {
+                        opportunityId: "0067f00000MissingRef1",
+                        accountId: "0017f00000Acc1",
+                        lastModifiedDate: "2026-09-14T10:00:00.000Z"
+                    }
+                }]' mediaType="application/java"/>
+            </munit:set-event>
+            <flow-ref name="order-consumer-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.businessErrorCode]" expected="#['MISSING_REFERENCE_DATA']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 4: Happy path consumer flow -->
+    <munit:test name="order-consumer-happy-path-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity details']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="enriched" value='#[output application/java --- [{
+                            Id: "0067f00000Happy1",
+                            Name: "Global Corp Order",
+                            AccountId: "0017f00000Acc1",
+                            StageName: "Closed Won",
+                            Amount: 150000.0,
+                            CloseDate: "2026-09-14",
+                            OwnerId: "0057f00000Owner1",
+                            Owner: { Email: "owner@globalcorp.com" },
+                            Pricebook2Id: "01s7f00000Pb1",
+                            ERP_Order_Number__c: null,
+                            Integration_Status__c: "NOT_PROCESSED",
+                            LastModifiedDate: "2026-09-14T10:00:00.000Z",
+                            SystemModstamp: "2026-09-14T10:00:00.000Z",
+                            Account: {
+                                Name: "Zenith Textiles",
+                                AccountNumber: "ACC-00129",
+                                ShippingStreet: "42 MG Road",
+                                ShippingCity: "Bengaluru",
+                                ShippingState: "KA",
+                                ShippingPostalCode: "560001",
+                                ShippingCountry: "India"
+                            },
+                            OpportunityLineItems: [{
+                                Id: "00k7f00000Line1",
+                                Quantity: 10.0,
+                                UnitPrice: 15000.0,
+                                TotalPrice: 150000.0,
+                                Product2Id: "01t7f00000Prod1",
+                                Product2: { Name: "Industrial Loom X1", ProductCode: "LOOM-X1" }
+                            }],
+                            OpportunityContactRoles: [{
+                                ContactId: "0037f00000Cont1",
+                                Contact: { Name: "Rajesh Kumar", Email: "rajesh@zenith.com", Phone: "+91-9876543210" }
+                            }]
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['System API: next order number']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="orderNumber" value="#['ERP-2026-000070']"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['System API: create order']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="persistResponse" value="#[{ attributes: { statusCode: 201 }, payload: { orderNumber: 'ERP-2026-000070', orderStatus: 'PERSISTED' } }]"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="file:write">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[payload]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="file:rename">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[payload]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="salesforce:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { success: true }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="email:send">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[payload]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/java --- {
+                    correlationId: "test-corr-happy",
+                    source: "Salesforce_Topic",
+                    enqueuedAt: "2026-09-14T10:00:00Z",
+                    payload: {
+                        opportunityId: "0067f00000Happy1",
+                        accountId: "0017f00000Acc1",
+                        lastModifiedDate: "2026-09-14T10:00:00.000Z"
+                    }
+                }]' mediaType="application/java"/>
+            </munit:set-event>
+            <flow-ref name="order-consumer-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.orderNumber]" expected="#['ERP-2026-000070']"/>
+            <munit-tools:assert-equals actual="#[vars.newStatus]" expected="#['FILE_GENERATED']"/>
+            <munit-tools:assert-equals actual="#[vars.fileOk]" expected="#[true]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 5: File write failure leaves order created without file, skipping write-back -->
+    <munit:test name="order-consumer-file-failure-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity details']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="enriched" value='#[output application/java --- [{
+                            Id: "0067f00000FileFail1",
+                            Name: "File Fail Opp",
+                            AccountId: "0017f00000Acc1",
+                            StageName: "Closed Won",
+                            Amount: 150000.0,
+                            CloseDate: "2026-09-14",
+                            OwnerId: "0057f00000Owner1",
+                            Owner: { Email: "owner@globalcorp.com" },
+                            Pricebook2Id: "01s7f00000Pb1",
+                            ERP_Order_Number__c: null,
+                            Integration_Status__c: "NOT_PROCESSED",
+                            LastModifiedDate: "2026-09-14T10:00:00.000Z",
+                            SystemModstamp: "2026-09-14T10:00:00.000Z",
+                            Account: {
+                                Name: "Zenith Textiles",
+                                AccountNumber: "ACC-00129",
+                                ShippingStreet: "42 MG Road",
+                                ShippingCity: "Bengaluru",
+                                ShippingState: "KA",
+                                ShippingPostalCode: "560001",
+                                ShippingCountry: "India"
+                            },
+                            OpportunityLineItems: [{
+                                Id: "00k7f00000Line1",
+                                Quantity: 10.0,
+                                UnitPrice: 15000.0,
+                                TotalPrice: 150000.0,
+                                Product2Id: "01t7f00000Prod1",
+                                Product2: { Name: "Industrial Loom X1", ProductCode: "LOOM-X1" }
+                            }],
+                            OpportunityContactRoles: []
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['System API: next order number']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="orderNumber" value="#['ERP-2026-000071']"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['System API: create order']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="persistResponse" value="#[{ attributes: { statusCode: 201 }, payload: { orderNumber: 'ERP-2026-000071', orderStatus: 'PERSISTED' } }]"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="file:write">
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="FILE:ACCESS_DENIED"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/java --- {
+                    correlationId: "test-corr-file-fail",
+                    source: "Salesforce_Topic",
+                    enqueuedAt: "2026-09-14T10:00:00Z",
+                    payload: {
+                        opportunityId: "0067f00000FileFail1",
+                        accountId: "0017f00000Acc1",
+                        lastModifiedDate: "2026-09-14T10:00:00.000Z"
+                    }
+                }]' mediaType="application/java"/>
+            </munit:set-event>
+            <flow-ref name="order-consumer-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.orderNumber]" expected="#['ERP-2026-000071']"/>
+            <munit-tools:assert-equals actual="#[vars.persistResult]" expected="#['OK']"/>
+            <munit-tools:assert-equals actual="#[vars.fileOk]" expected="#[false]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 6: Inbound event missing required fields routes to orders-dlq -->
+    <munit:test name="order-consumer-invalid-message-dlq-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="vm:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Publish to orders-dlq']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[payload]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/java --- {
+                    correlationId: null,
+                    source: "Salesforce_Topic",
+                    enqueuedAt: "2026-09-14T10:00:00Z",
+                    payload: {
+                        opportunityId: null,
+                        accountId: null,
+                        lastModifiedDate: null
+                    }
+                }]' mediaType="application/java"/>
+            </munit:set-event>
+            <flow-ref name="order-consumer-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:verify-call processor="vm:publish" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Publish to orders-dlq']"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+</mule>

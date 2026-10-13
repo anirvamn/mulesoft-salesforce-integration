@@ -1,0 +1,8 @@
+# Template for local development - copy to local.properties
+http.port=8082
+
+db.host=localhost
+db.port=5432
+db.name=orders_db
+db.user=postgres
+db.password=YOUR_LOCAL_DB_PASSWORD

@@ -18,6 +18,7 @@
         <app.runtime>4.12.1</app.runtime>
         <mule.maven.plugin.version>4.10.1</mule.maven.plugin.version>
         <munit.version>3.7.3</munit.version>
+        <secure.key>${env.SECURE_KEY}</secure.key>
     </properties>
 
     <build>
@@ -59,6 +60,9 @@
                     </execution>
                 </executions>
                 <configuration>
+                    <argLines>
+                        <argLine>-Dsecure.key=${secure.key}</argLine>
+                    </argLines>
                     <coverage>
                         <runCoverage>true</runCoverage>
                         <failBuild>false</failBuild>

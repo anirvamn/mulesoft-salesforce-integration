@@ -1,0 +1,25 @@
+# ==============================================================================
+# SECURE PROPERTIES TEMPLATE (PLACEHOLDERS ONLY)
+# ==============================================================================
+# Values below are dummy placeholders encrypted using Blowfish CBC (random IVs enabled)
+# with the default local test key: MyHackKey2026abc
+#
+# Dummy decrypted contents:
+#   db.password   -> postgres
+#   sf.password   -> dummy_password
+#   sf.token      -> dummy_token
+#   smtp.password -> dummy_smtp_password
+#
+# To run local MUnit tests:
+#   1. Copy this file to secure.properties:
+#      cp secure.properties.example secure.properties
+#   2. Set environment variable:
+#      SECURE_KEY=MyHackKey2026abc
+#
+# For live credentials, use the Mule Secure Properties Tool (see README.md).
+# ==============================================================================
+
+db.password=![1SQvZPg8xFTki8fp2CRKFBk5woIOjWPA]
+sf.password=![VrgHF5OFFQVLHrHc9qpqQqRgeBGfj7nK]
+sf.token=![k9oyj/NiMT8O3a91mXaBcDuAZnNE/R50]
+smtp.password=![83j79yR5vJDNydDY3TIxbNr2hIpPGpWdYF6rkQvRBGs=]

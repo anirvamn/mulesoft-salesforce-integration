@@ -24,9 +24,12 @@ http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/sc
 
     <configuration-properties file="local.properties" />
 
+
     <os:object-store name="Idempotent_Store" persistent="true" entryTtl="7" entryTtlUnit="DAYS" doc:name="Idempotent Store" />
 
     <os:object-store name="Watermark_Store" persistent="true" doc:name="Watermark Store" />
+
+    <os:object-store name="Reference_Data_Store" entryTtl="${ref.cache.ttl.minutes}" entryTtlUnit="MINUTES" doc:name="Reference Data Store" />
 
     <vm:config name="VM_Config" doc:name="VM Config">
         <vm:queues>
@@ -120,7 +123,7 @@ http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/sc
     </flow>
 
     <flow name="publish-orders-queue-op-flow">
-        <vm:publish doc:name="Publish to orders-queue" config-ref="VM_Config" queueName="orders-queue">
+        <vm:publish doc:name="Publish to orders-queue" config-ref="VM_Config" queueName="orders-queue" correlationId="#[vars.queueEvent.correlationId]">
             <vm:content><![CDATA[#[vars.queueEvent]]]></vm:content>
         </vm:publish>
     </flow>
@@ -130,7 +133,7 @@ http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/sc
         <set-variable variableName="queueMessage" value="#[payload]" doc:name="Keep original message" />
         <logger level="INFO" doc:name="Log Consumed" message='#["CONSUMED from orders-queue: correlationId $(payload.correlationId default "none") opportunity $(payload.payload.opportunityId default "none")"]' />
         <choice doc:name="Valid message?">
-            <when expression="#[not isEmpty(payload.correlationId default '') and not isEmpty(payload.payload.opportunityId default '') and not isEmpty(payload.payload.accountId default '') and not isEmpty(payload.payload.lastModifiedDate default '')]">
+            <when expression="#[!isEmpty(payload.correlationId) and !isEmpty(payload.payload.opportunityId) and !isEmpty(payload.payload.accountId) and !isEmpty(payload.payload.lastModifiedDate)]">
                 <logger level="INFO" doc:name="Log Validated" message='#["VALIDATED message: correlationId $(payload.correlationId) opportunity $(payload.payload.opportunityId)"]' />
                 <set-variable variableName="corrId" value="#[payload.correlationId]" doc:name="Set corrId" />
                 <set-variable variableName="oppId" value="#[payload.payload.opportunityId]" doc:name="Set oppId" />
@@ -168,17 +171,17 @@ http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/sc
                         <flow-ref name="business-error-flow" doc:name="Handle business error" />
                     </when>
                     <otherwise>
-                        <logger level="INFO" doc:name="Log Amount OK" message='#["AMOUNT OK corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): $(vars.amountCheck.lineCount) lines total $(vars.amountCheck.calculatedTotal), matches opportunity amount $(vars.amountCheck.opportunityAmount)"]' />
+                        <logger level="INFO" doc:name="Log Amount OK" message='#[output application/java --- "AMOUNT OK corr=$(vars.corrId) opp=$(vars.oppId): $(vars.amountCheck.lineCount) lines total $(vars.amountCheck.calculatedTotal), matches opportunity amount $(vars.amountCheck.opportunityAmount)"]' />
                         <set-variable variableName="retryOpFlow" value="order-number-op-flow" doc:name="Operation: order number" />
                         <flow-ref name="retry-flow" doc:name="Retry: order number" />
-                        <logger level="INFO" doc:name="Log Order Number" message='#[output application/java --- "ORDER NUMBER corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): $(vars.orderNumber default "none")"]' />
+                        <logger level="INFO" doc:name="Log Order Number" message='#[output application/java --- "ORDER NUMBER corr=$(vars.corrId) opp=$(vars.oppId): $(vars.orderNumber default "none")"]' />
                         <ee:transform doc:name="Build canonical order">
                             <ee:message />
                             <ee:variables>
                                 <ee:set-variable variableName="canonicalOrder" resource="dwl/build-canonical-order.dwl" />
                             </ee:variables>
                         </ee:transform>
-                        <logger level="INFO" doc:name="Log Canonical Order" message='#[output application/java --- "CANONICAL ORDER corr=$(payload.correlationId) opp=$(payload.payload.opportunityId): " ++ write(vars.canonicalOrder, "application/json")]' />
+                        <logger level="INFO" doc:name="Log Canonical Order" message='#[output application/java --- "CANONICAL ORDER corr=$(vars.corrId) opp=$(vars.oppId): " ++ write(vars.canonicalOrder, "application/json")]' />
                         <set-variable variableName="retryOpFlow" value="persist-order-flow" doc:name="Operation: persist order" />
                         <flow-ref name="retry-flow" doc:name="Retry: persist order" />
                         <choice doc:name="Order persisted?">
@@ -214,7 +217,7 @@ http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/sc
                 </choice>
             </when>
             <otherwise>
-                <logger level="WARN" doc:name="Log Invalid" message='#["INVALID message sent to orders-dlq: correlationId $(payload.correlationId default "none")"]' />
+                <logger level="WARN" doc:name="Log Invalid" message='#[output application/java --- "INVALID message sent to orders-dlq: correlationId " ++ (payload.correlationId default "none")]' />
                 <vm:publish doc:name="Publish to orders-dlq" config-ref="VM_Config" queueName="orders-dlq">
                     <vm:content><![CDATA[#[payload]]]></vm:content>
                 </vm:publish>
@@ -275,7 +278,32 @@ http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/sc
 
         <try doc:name="Attempt operation">
 
-            <flow-ref name="#[vars.retryOpFlow]" doc:name="Run operation"/>
+            <choice doc:name="Route to operation">
+                <when expression="#[vars.retryOpFlow == 'sf-enrich-query-op-flow']">
+                    <flow-ref name="sf-enrich-query-op-flow" doc:name="Run sf-enrich-query-op-flow"/>
+                </when>
+                <when expression="#[vars.retryOpFlow == 'order-number-op-flow']">
+                    <flow-ref name="order-number-op-flow" doc:name="Run order-number-op-flow"/>
+                </when>
+                <when expression="#[vars.retryOpFlow == 'persist-order-flow']">
+                    <flow-ref name="persist-order-flow" doc:name="Run persist-order-flow"/>
+                </when>
+                <when expression="#[vars.retryOpFlow == 'write-file-op-flow']">
+                    <flow-ref name="write-file-op-flow" doc:name="Run write-file-op-flow"/>
+                </when>
+                <when expression="#[vars.retryOpFlow == 'sf-writeback-op-flow']">
+                    <flow-ref name="sf-writeback-op-flow" doc:name="Run sf-writeback-op-flow"/>
+                </when>
+                <when expression="#[vars.retryOpFlow == 'send-email-op-flow']">
+                    <flow-ref name="send-email-op-flow" doc:name="Run send-email-op-flow"/>
+                </when>
+                <when expression="#[vars.retryOpFlow == 'publish-orders-queue-op-flow']">
+                    <flow-ref name="publish-orders-queue-op-flow" doc:name="Run publish-orders-queue-op-flow"/>
+                </when>
+                <otherwise>
+                    <flow-ref name="#[vars.retryOpFlow]" doc:name="Run operation"/>
+                </otherwise>
+            </choice>
 
             <set-variable variableName="retryStatus"
                           value="#['OK']"
@@ -392,10 +420,27 @@ Thread::sleep(vars.retryDelayMs as Number)]]></ee:set-variable>
     </flow>
 
     <flow name="sf-enrich-query-op-flow">
-        <salesforce:query doc:name="Query opportunity details" config-ref="Salesforce_Config" target="enriched">
-            <salesforce:salesforce-query><![CDATA[SELECT Id, Name, AccountId, StageName, Amount, CloseDate, OwnerId, Owner.Email, Pricebook2Id, ERP_Order_Number__c, Integration_Status__c, LastModifiedDate, SystemModstamp, Account.Name, Account.AccountNumber, Account.ShippingStreet, Account.ShippingCity, Account.ShippingState, Account.ShippingPostalCode, Account.ShippingCountry, (SELECT Id, Quantity, UnitPrice, TotalPrice, Product2Id, Product2.Name, Product2.ProductCode FROM OpportunityLineItems), (SELECT ContactId, Contact.Name, Contact.Email, Contact.Phone FROM OpportunityContactRoles WHERE IsPrimary = true) FROM Opportunity WHERE Id = ':oppId']]></salesforce:salesforce-query>
-            <salesforce:parameters><![CDATA[#[{ oppId: vars.oppId }]]]></salesforce:parameters>
-        </salesforce:query>
+        <os:retrieve key="#[vars.oppId]" objectStore="Reference_Data_Store" target="enriched" doc:name="Check reference cache">
+            <os:default-value>#[[]]</os:default-value>
+        </os:retrieve>
+        <choice doc:name="In cache?">
+            <when expression="#[isEmpty(vars.enriched)]">
+                <salesforce:query doc:name="Query opportunity details" config-ref="Salesforce_Config" target="enriched">
+                    <salesforce:salesforce-query><![CDATA[SELECT Id, Name, AccountId, StageName, Amount, CloseDate, OwnerId, Owner.Email, Pricebook2Id, ERP_Order_Number__c, Integration_Status__c, LastModifiedDate, SystemModstamp, Account.Name, Account.AccountNumber, Account.ShippingStreet, Account.ShippingCity, Account.ShippingState, Account.ShippingPostalCode, Account.ShippingCountry, (SELECT Id, Quantity, UnitPrice, TotalPrice, Product2Id, Product2.Name, Product2.ProductCode FROM OpportunityLineItems), (SELECT ContactId, Contact.Name, Contact.Email, Contact.Phone FROM OpportunityContactRoles WHERE IsPrimary = true) FROM Opportunity WHERE Id = ':oppId']]></salesforce:salesforce-query>
+                    <salesforce:parameters><![CDATA[#[{ oppId: vars.oppId }]]]></salesforce:parameters>
+                </salesforce:query>
+                <choice doc:name="Cache successful enrichment?">
+                    <when expression="#[not isEmpty(vars.enriched)]">
+                        <os:store key="#[vars.oppId]" objectStore="Reference_Data_Store" doc:name="Cache opportunity reference">
+                            <os:value>#[vars.enriched]</os:value>
+                        </os:store>
+                    </when>
+                </choice>
+            </when>
+            <otherwise>
+                <logger level="INFO" doc:name="Log Cache Hit" message='#[output application/java --- "CACHE HIT opp=$(vars.oppId): reference data served from cache"]' />
+            </otherwise>
+        </choice>
     </flow>
 
     <flow name="order-number-op-flow">
@@ -755,7 +800,7 @@ var fmt = (n) -> n as String {format: "0.##"}
                 <logger level="WARN" doc:name="Log No Watermark" message="WATERMARK not found - starting fresh" />
             </when>
             <otherwise>
-                <logger level="INFO" doc:name="Log Resume" message='#["WATERMARK found - resuming after $(payload)"]' />
+                <logger level="INFO" doc:name="Log Resume" message='#[output application/java --- "WATERMARK found - resuming after " ++ (payload default "unknown")]' />
             </otherwise>
         </choice>
     </flow>

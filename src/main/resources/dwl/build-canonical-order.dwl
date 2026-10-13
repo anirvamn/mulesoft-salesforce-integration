@@ -40,6 +40,6 @@
      lines: builtLines,
      lineCount: sizeOf(builtLines),
      totalAmount: sum(builtLines.lineTotal),
-     orderStatus: "VALIDATED",
+     orderStatus: "RECEIVED",
      correlationId: payload.correlationId
    }

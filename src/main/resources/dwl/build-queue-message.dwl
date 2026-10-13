@@ -2,11 +2,11 @@
    output application/json
    ---
    {
-     correlationId: uuid(),
+     correlationId: payload.correlationId default uuid(),
      eventType: "OPPORTUNITY_CLOSED_WON",
      eventTimestamp: now(),
-     replayId: null,
-     retryCount: 0,
+     replayId: payload.replayId default null,
+     retryCount: payload.retryCount default 0,
      payload: {
        opportunityId: payload.Id,
        accountId: payload.AccountId,

@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <munit:config name="order-system-api-test-suite"/>
+
+    <!-- Test 1: POST /order-numbers returns 201 with generated sequence -->
+    <munit:test name="post-order-numbers-success-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Next order number']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{ order_number: 'ERP-2026-000070' }]]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{ headers: { 'x-correlation-id': 'test-corr-1' } }]"/>
+            </munit:set-event>
+            <flow-ref name="post:\order-numbers:order-system-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[201]"/>
+            <munit-tools:assert-equals actual="#[payload.orderNumber]" expected="#['ERP-2026-000070']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 2: POST /orders valid payload creates order (201) -->
+    <munit:test name="post-orders-success-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:insert">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[1]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/json --- {
+                    orderNumber: "ERP-2026-000070",
+                    opportunityId: "0067f00000XyZaBAAQ",
+                    currency: "INR",
+                    totalAmount: 287400.00,
+                    lineCount: 1,
+                    orderStatus: "VALIDATED",
+                    sfLastModified: "2026-09-14T11:02:43.000Z",
+                    correlationId: "test-corr-2",
+                    account: {
+                        accountId: "0017f00000LmNoPAAQ",
+                        accountName: "Zenith Textiles",
+                        accountNumber: "ACC-10231"
+                    },
+                    shippingAddress: {
+                        addressLine1: "21 Anna Salai",
+                        city: "Chennai",
+                        state: "Tamil Nadu",
+                        postalCode: "600002",
+                        country: "India"
+                    },
+                    lines: [
+                        {
+                            lineNumber: 1,
+                            productCode: "PRD-AUT-140",
+                            productName: "Automation Controller X140",
+                            quantity: 6,
+                            unitPrice: 38900.00,
+                            lineTotal: 233400.00
+                        }
+                    ]
+                }]'/>
+            </munit:set-event>
+            <flow-ref name="post:\orders:application\json:order-system-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[201]"/>
+            <munit-tools:assert-equals actual="#[payload.orderNumber]" expected="#['ERP-2026-000070']"/>
+            <munit-tools:assert-equals actual="#[payload.orderStatus]" expected="#['VALIDATED']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 3: POST /orders with empty lines or lineCount mismatch returns 400 -->
+    <munit:test name="post-orders-missing-lines-test">
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/json --- {
+                    orderNumber: "ERP-2026-000070",
+                    opportunityId: "0067f00000XyZaBAAQ",
+                    currency: "INR",
+                    totalAmount: 0.0,
+                    lineCount: 1,
+                    orderStatus: "VALIDATED",
+                    sfLastModified: "2026-09-14T11:02:43.000Z",
+                    correlationId: "test-corr-3",
+                    account: {
+                        accountId: "0017f00000LmNoPAAQ",
+                        accountName: "Zenith Textiles"
+                    },
+                    lines: []
+                }]'/>
+            </munit:set-event>
+            <flow-ref name="post:\orders:application\json:order-system-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[400]"/>
+            <munit-tools:assert-equals actual="#[payload.code]" expected="#['INVALID_ORDER']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 4: POST /orders with duplicate key error returns 409 -->
+    <munit:test name="post-orders-duplicate-key-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:insert">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Insert order header']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error cause="#[java!java::lang::Exception::new('duplicate key value violates unique constraint uq_order_opportunity')]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/json --- {
+                    orderNumber: "ERP-2026-000070",
+                    opportunityId: "0067f00000XyZaBAAQ",
+                    currency: "INR",
+                    totalAmount: 100.0,
+                    lineCount: 1,
+                    orderStatus: "VALIDATED",
+                    sfLastModified: "2026-09-14T11:02:43.000Z",
+                    correlationId: "test-corr-4",
+                    account: {
+                        accountId: "0017f00000LmNoPAAQ",
+                        accountName: "Zenith Textiles"
+                    },
+                    lines: [
+                        {
+                            lineNumber: 1,
+                            productCode: "PRD-1",
+                            quantity: 1,
+                            unitPrice: 100.0,
+                            lineTotal: 100.0
+                        }
+                    ]
+                }]'/>
+            </munit:set-event>
+            <try>
+                <flow-ref name="post:\orders:application\json:order-system-api-config"/>
+                <error-handler>
+                    <on-error-continue type="ANY" logException="false">
+                        <logger level="INFO" message="Handled propagated 409 error in test wrapper"/>
+                    </on-error-continue>
+                </error-handler>
+            </try>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[409]"/>
+            <munit-tools:assert-equals actual="#[payload.code]" expected="#['DUPLICATE_ORDER']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 5: GET /orders/{orderNumber} not found returns 404 -->
+    <munit:test name="get-order-not-found-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[]]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{ uriParams: { orderNumber: 'ERP-9999-999999' } }]"/>
+            </munit:set-event>
+            <flow-ref name="get:\orders\(orderNumber):order-system-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[404]"/>
+            <munit-tools:assert-equals actual="#[payload.code]" expected="#['ORDER_NOT_FOUND']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 6: GET /orders/{orderNumber} success returns 200 with details -->
+    <munit:test name="get-order-success-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Select order header']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="orderRows" value="#[[{
+                            order_number: 'ERP-2026-000070',
+                            opportunity_id: '0067f00000XyZaBAAQ',
+                            account_id: '0017f00000LmNoPAAQ',
+                            account_name: 'Zenith Textiles',
+                            currency: 'INR',
+                            total_amount: 287400.00,
+                            line_count: 1,
+                            order_status: 'SF_UPDATED',
+                            file_name: 'ORDER_ERP-2026-000070_20260914163252.xml',
+                            file_status: 'GENERATED',
+                            sf_update_status: 'SUCCESS',
+                            email_status: 'SENT',
+                            correlation_id: 'test-corr-6',
+                            created_at: now(),
+                            updated_at: now()
+                        }]]"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Select order lines']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="orderLines" value="#[[{
+                            line_number: 1,
+                            product_code: 'PRD-AUT-140',
+                            product_name: 'Automation Controller X140',
+                            quantity: 6,
+                            unit_price: 38900.00,
+                            line_total: 233400.00
+                        }]]"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{ uriParams: { orderNumber: 'ERP-2026-000070' } }]"/>
+            </munit:set-event>
+            <flow-ref name="get:\orders\(orderNumber):order-system-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[payload.orderNumber]" expected="#['ERP-2026-000070']"/>
+            <munit-tools:assert-equals actual="#[payload.orderStatus]" expected="#['SF_UPDATED']"/>
+            <munit-tools:assert-equals actual="#[sizeOf(payload.lines)]" expected="#[1]"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 7: PATCH /orders/{orderNumber} success returns 200 -->
+    <munit:test name="patch-order-success-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[output application/java --- { affectedRows: 1 }]" mediaType="application/java"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{ uriParams: { orderNumber: 'ERP-2026-000070' } }]"/>
+                <munit:payload value='#[output application/json --- {
+                    orderStatus: "FILE_GENERATED",
+                    fileName: "ORDER_ERP-2026-000070_20260914163252.xml",
+                    fileStatus: "GENERATED"
+                }]'/>
+            </munit:set-event>
+            <flow-ref name="patch:\orders\(orderNumber):application\json:order-system-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[payload.orderNumber]" expected="#['ERP-2026-000070']"/>
+            <munit-tools:assert-equals actual="#[payload.updated]" expected="#[true]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

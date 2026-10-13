@@ -58,6 +58,9 @@ target/
 .env.*
 !.env.example
 munit-output.txt
+*.log
+munit-*.txt
+munit-*.log
 src/main/resources/local.properties
 src/main/resources/secure.properties
 **/local.properties

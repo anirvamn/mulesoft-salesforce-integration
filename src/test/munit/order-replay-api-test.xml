@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd">
+
+    <munit:config name="order-replay-api-test-suite"/>
+
+    <!-- Test 1: Replay with non-existent opportunity returns 404 -->
+    <munit:test name="post-orders-replay-not-found-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="oppResult" value="#[[]]"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/json --- {
+                    opportunityId: "006000000000404AAA",
+                    force: false
+                }]'/>
+            </munit:set-event>
+            <flow-ref name="post:\orders\replay:application\json:order-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[404]"/>
+            <munit-tools:assert-equals actual="#[payload.errorCode]" expected="#['NOT_FOUND']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 2: Replay for non-Closed Won stage returns 400 -->
+    <munit:test name="post-orders-replay-not-closed-won-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="oppResult" value='#[output application/java --- [{
+                            Id: "006000000000ProspectAAA",
+                            AccountId: "001000000000001AAA",
+                            OwnerId: "005000000000001AAA",
+                            Amount: 50000.0,
+                            CloseDate: "2026-10-01",
+                            StageName: "Prospecting",
+                            Integration_Status__c: "NOT_PROCESSED",
+                            LastModifiedDate: "2026-10-01T10:00:00.000Z"
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/json --- {
+                    opportunityId: "006000000000ProspectAAA",
+                    force: false
+                }]'/>
+            </munit:set-event>
+            <flow-ref name="post:\orders\replay:application\json:order-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[400]"/>
+            <munit-tools:assert-equals actual="#[payload.errorCode]" expected="#['NOT_CLOSED_WON']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 3: Replay for already PROCESSED opportunity without force returns 200 SKIPPED_DUPLICATE -->
+    <munit:test name="post-orders-replay-already-processed-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="oppResult" value='#[output application/java --- [{
+                            Id: "006000000000ProcessedAAA",
+                            AccountId: "001000000000001AAA",
+                            OwnerId: "005000000000001AAA",
+                            Amount: 75000.0,
+                            CloseDate: "2026-10-01",
+                            StageName: "Closed Won",
+                            Integration_Status__c: "PROCESSED",
+                            LastModifiedDate: "2026-10-01T10:00:00.000Z"
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/json --- {
+                    opportunityId: "006000000000ProcessedAAA",
+                    force: false
+                }]'/>
+            </munit:set-event>
+            <flow-ref name="post:\orders\replay:application\json:order-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[200]"/>
+            <munit-tools:assert-equals actual="#[payload.result]" expected="#['SKIPPED_DUPLICATE']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 4: Replay with force=true bypasses duplicate check and publishes to orders-queue returning 202 -->
+    <munit:test name="post-orders-replay-success-force-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="salesforce:query">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query opportunity']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="oppResult" value='#[output application/java --- [{
+                            Id: "006000000000ForceAAA",
+                            AccountId: "001000000000001AAA",
+                            OwnerId: "005000000000001AAA",
+                            Amount: 120000.0,
+                            CloseDate: "2026-10-01",
+                            StageName: "Closed Won",
+                            Integration_Status__c: "PROCESSED",
+                            LastModifiedDate: "2026-10-01T10:00:00.000Z",
+                            CurrencyIsoCode: "INR"
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="vm:publish">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Publish to orders-queue']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[payload]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value='#[output application/json --- {
+                    opportunityId: "006000000000ForceAAA",
+                    force: true
+                }]'/>
+            </munit:set-event>
+            <flow-ref name="post:\orders\replay:application\json:order-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[202]"/>
+            <munit-tools:assert-equals actual="#[payload.result]" expected="#['REPUBLISHED']"/>
+            <munit-tools:verify-call processor="vm:publish" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Publish to orders-queue']"/>
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 5: GET /orders/{orderNumber} not found returns 404 -->
+    <munit:test name="get-orders-not-found-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Select order header']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="orderHeader" value="#[[]]"/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{ uriParams: { orderNumber: 'ERP-2026-999999' } }]"/>
+            </munit:set-event>
+            <flow-ref name="get:\orders\(orderNumber):order-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[404]"/>
+            <munit-tools:assert-equals actual="#[payload.errorCode]" expected="#['NOT_FOUND']"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 6: GET /orders/{orderNumber} success returns 200 with order details -->
+    <munit:test name="get-orders-success-test">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Select order header']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="orderHeader" value='#[output application/java --- [{
+                            order_number: "ERP-2026-000070",
+                            opportunity_id: "0067f00000Happy1",
+                            account_name: "Zenith Textiles",
+                            currency: "INR",
+                            total_amount: 150000.0,
+                            line_count: 1,
+                            order_status: "FILE_GENERATED",
+                            file_name: "ORDER_ERP-2026-000070_20261013120000.xml",
+                            sf_update_status: "SF_UPDATED",
+                            email_status: "SENT",
+                            correlation_id: "test-corr-happy"
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Select order lines']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:variables>
+                        <munit-tools:variable key="orderLines" value='#[output application/java --- [{
+                            line_number: 1,
+                            product_code: "LOOM-X1",
+                            product_name: "Industrial Loom X1",
+                            quantity: 10.0,
+                            unit_price: 15000.0,
+                            line_total: 150000.0
+                        }]]'/>
+                    </munit-tools:variables>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{ uriParams: { orderNumber: 'ERP-2026-000070' } }]"/>
+            </munit:set-event>
+            <flow-ref name="get:\orders\(orderNumber):order-api-config"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[payload.orderNumber]" expected="#['ERP-2026-000070']"/>
+            <munit-tools:assert-equals actual="#[payload.orderStatus]" expected="#['FILE_GENERATED']"/>
+            <munit-tools:assert-equals actual="#[payload.lineCount]" expected="#[1]"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>
