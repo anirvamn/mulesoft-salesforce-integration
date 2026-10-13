@@ -65,3 +65,6 @@ src/main/resources/local.properties
 src/main/resources/secure.properties
 **/local.properties
 **/secure.properties
+ deployment_detail.json
+m64nx_full_log.txt
+**/deploy-log.txt

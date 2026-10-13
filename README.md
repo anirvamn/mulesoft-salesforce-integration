@@ -2,6 +2,10 @@
 
 Production-grade event-driven, API-led MuleSoft integration for capturing Salesforce Closed-Won Opportunities, persisting orders to a PostgreSQL fulfilment database, dropping atomic warehouse XML files, notifying the fulfilment desk via email, updating Salesforce, and exposing a Replay API.
 
+> 📖 **Developer Documentation Quick Links:**
+> - **[Local Setup Guide for Windows](docs/LOCAL_SETUP_GUIDE.md)** — Complete step-by-step developer onboarding, prerequisites, property templates, credential encryption, and startup commands.
+> - **[High-Level Design (HLD)](docs/HIGH_LEVEL_DESIGN.md)** — Architecture design, order status machine (`RECEIVED` -> `NOTIFIED`), caching, and resilience patterns.
+
 ---
 
 ## 1. Architecture Overview
@@ -128,7 +132,8 @@ java -cp secure-properties-tool.jar com.mulesoft.tools.SecurePropertiesTool \
   Blowfish \
   CBC \
   <YOUR_SECURE_KEY> \
-  "<PLAINTEXT_VALUE>"
+  "<PLAINTEXT_VALUE>" \
+  --use-random-iv
 ```
 Wrap the output in `![...]` in `src/main/resources/secure.properties`:
 ```ini
@@ -192,6 +197,7 @@ mvn clean test
 To run both services side-by-side locally:
 
 ### 1. Start `order-system-api` (Port 8082)
+From repository root:
 ```bash
 cd order-system-api
 mvn mule:run
@@ -200,8 +206,8 @@ Console verification:
 `http://localhost:8082/console/`
 
 ### 2. Start `sf-listener` (Port 8081)
+From the repository root (in a second terminal):
 ```bash
-cd sf-listener
 mvn mule:run -Dsecure.key=$SECURE_KEY
 ```
 Console verification:

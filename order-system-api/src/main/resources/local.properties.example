@@ -6,3 +6,5 @@ db.port=5432
 db.name=orders_db
 db.user=postgres
 db.password=YOUR_LOCAL_DB_PASSWORD
+# API Manager Autodiscovery ID (0 for offline/local development)
+api.id=0

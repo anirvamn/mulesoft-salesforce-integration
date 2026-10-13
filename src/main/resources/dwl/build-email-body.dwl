@@ -14,7 +14,7 @@ var lineText = (o.lines map ((l) ->
 "Opportunity: " ++ (o.opportunityId default "") ++ "\n" ++
 "Order Value: " ++ (o.currency default "") ++ " " ++ (o.totalAmount default 0) ++ "\n" ++
 "Fulfilment File: " ++ (vars.finalFileName default "") ++ "\n" ++
-"Ship To: " ++ [o.shippingAddress.addressLine1, o.shippingAddress.city, o.shippingAddress.state, o.shippingAddress.postalCode, o.shippingAddress.country] filter (!isEmpty($)) joinBy ", " ++ "\n\n" ++
+"Ship To: " ++ (([o.shippingAddress.addressLine1, o.shippingAddress.city, o.shippingAddress.state, o.shippingAddress.postalCode, o.shippingAddress.country] filter (!isEmpty($))) joinBy ", ") ++ "\n\n" ++
 "Line Items:\n" ++ lineText ++ "\n\n" ++
 "Correlation Id: " ++ o.correlationId ++ "\n\n" ++
 "Regards,\nOrder Fulfilment Service"

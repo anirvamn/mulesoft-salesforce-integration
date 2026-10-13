@@ -22,7 +22,10 @@ retry.delay.ms=2000
 email.retry.frequency.ms=60000
 email.retry.batch.size=10
 
+orders.api.protocol=HTTP
 orders.api.host=localhost
 orders.api.port=8082
 
 ref.cache.ttl.minutes=60
+# API Manager Autodiscovery ID (0 for offline/local development)
+api.id=0

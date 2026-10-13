@@ -5,7 +5,7 @@
 
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.mycompany</groupId>
+    <groupId>413354b4-2c72-4011-a8bd-84553ef2a972</groupId>
     <artifactId>sf-listener</artifactId>
     <version>1.0.0-SNAPSHOT</version>
     <packaging>mule-application</packaging>
@@ -19,6 +19,21 @@
         <mule.maven.plugin.version>4.10.1</mule.maven.plugin.version>
         <munit.version>3.7.3</munit.version>
         <secure.key>${env.SECURE_KEY}</secure.key>
+
+        <!-- Deployment Profile Defaults (Overridable via CLI / Settings) -->
+        <anypoint.uri>https://anypoint.mulesoft.com</anypoint.uri>
+        <anypoint.environment>Sandbox</anypoint.environment>
+        <anypoint.target>Cloudhub-US-East-2</anypoint.target>
+        <anypoint.server>anypoint-exchange-v3</anypoint.server>
+        <anypoint.app.name>sf-listener</anypoint.app.name>
+        <anypoint.replicas>1</anypoint.replicas>
+        <anypoint.vCores>0.1</anypoint.vCores>
+        <anypoint.generatePublicUrl>true</anypoint.generatePublicUrl>
+        <anypoint.workers>1</anypoint.workers>
+        <anypoint.workerType>MICRO</anypoint.workerType>
+        <anypoint.region>us-east-2</anypoint.region>
+        <mule.env>local</mule.env>
+        <api.id>0</api.id>
     </properties>
 
     <build>
@@ -210,5 +225,119 @@
             </snapshots>
         </pluginRepository>
     </pluginRepositories>
+
+    <profiles>
+        <!-- CloudHub 2.0 / Runtime Fabric (Containerized) Deployment Profile -->
+        <profile>
+            <id>cloudhub2</id>
+            <distributionManagement>
+                <repository>
+                    <id>${anypoint.server}</id>
+                    <name>Anypoint Exchange V3</name>
+                    <url>https://maven.anypoint.mulesoft.com/api/v3/organizations/${anypoint.org.id}/maven</url>
+                    <layout>default</layout>
+                </repository>
+            </distributionManagement>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.mule.tools.maven</groupId>
+                        <artifactId>mule-maven-plugin</artifactId>
+                        <configuration>
+                            <cloudhub2Deployment>
+                                <uri>${anypoint.uri}</uri>
+                                <provider>MC</provider>
+                                <environment>${anypoint.environment}</environment>
+                                <target>${anypoint.target}</target>
+                                <muleVersion>${app.runtime}</muleVersion>
+                                <server>${anypoint.server}</server>
+                                <applicationName>${anypoint.app.name}</applicationName>
+                                <replicas>${anypoint.replicas}</replicas>
+                                <vCores>${anypoint.vCores}</vCores>
+                                <deploymentSettings>
+                                    <generateDefaultPublicUrl>${anypoint.generatePublicUrl}</generateDefaultPublicUrl>
+                                </deploymentSettings>
+                                <properties>
+                                    <mule.env>${mule.env}</mule.env>
+                                    <secure.key>${secure.key}</secure.key>
+                                    <api.id>${api.id}</api.id>
+                                    <anypoint.platform.gatekeeper>flexible</anypoint.platform.gatekeeper>
+                                </properties>
+                            </cloudhub2Deployment>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Runtime Fabric (RTF) Deployment Profile -->
+        <profile>
+            <id>rtf</id>
+            <distributionManagement>
+                <repository>
+                    <id>${anypoint.server}</id>
+                    <name>Anypoint Exchange V3</name>
+                    <url>https://maven.anypoint.mulesoft.com/api/v3/organizations/${anypoint.org.id}/maven</url>
+                    <layout>default</layout>
+                </repository>
+            </distributionManagement>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.mule.tools.maven</groupId>
+                        <artifactId>mule-maven-plugin</artifactId>
+                        <configuration>
+                            <runtimeFabricDeployment>
+                                <uri>${anypoint.uri}</uri>
+                                <target>${anypoint.target}</target>
+                                <environment>${anypoint.environment}</environment>
+                                <muleVersion>${app.runtime}</muleVersion>
+                                <server>${anypoint.server}</server>
+                                <applicationName>${anypoint.app.name}</applicationName>
+                                <replicas>${anypoint.replicas}</replicas>
+                                <properties>
+                                    <mule.env>${mule.env}</mule.env>
+                                    <secure.key>${secure.key}</secure.key>
+                                    <api.id>${api.id}</api.id>
+                                    <anypoint.platform.gatekeeper>flexible</anypoint.platform.gatekeeper>
+                                </properties>
+                            </runtimeFabricDeployment>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- CloudHub 1.0 (Worker-based) Deployment Profile -->
+        <profile>
+            <id>cloudhub</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.mule.tools.maven</groupId>
+                        <artifactId>mule-maven-plugin</artifactId>
+                        <configuration>
+                            <cloudHubDeployment>
+                                <uri>${anypoint.uri}</uri>
+                                <muleVersion>${app.runtime}</muleVersion>
+                                <server>${anypoint.server}</server>
+                                <environment>${anypoint.environment}</environment>
+                                <applicationName>${anypoint.app.name}</applicationName>
+                                <workers>${anypoint.workers}</workers>
+                                <workerType>${anypoint.workerType}</workerType>
+                                <region>${anypoint.region}</region>
+                                <properties>
+                                    <mule.env>${mule.env}</mule.env>
+                                    <secure.key>${secure.key}</secure.key>
+                                    <api.id>${api.id}</api.id>
+                                    <anypoint.platform.gatekeeper>flexible</anypoint.platform.gatekeeper>
+                                </properties>
+                            </cloudHubDeployment>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>

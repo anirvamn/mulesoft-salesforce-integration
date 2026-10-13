@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd">
+
+    <munit:config name="watermark-flow-test-suite"/>
+
+    <!-- Test 1: Empty watermark on startup (returns default NONE) -->
+    <munit:test name="startup-watermark-empty-test" description="Verifies startup flow when watermark store is empty">
+        <munit:behavior>
+            <munit-tools:mock-when processor="os:retrieve">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Read watermark']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#['NONE']"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="startup-watermark-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[payload]" expected="#['NONE']" message="Payload should be NONE for empty watermark"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 2: Previously persisted watermark on startup -->
+    <munit:test name="startup-watermark-persisted-test" description="Verifies startup flow when watermark exists in store">
+        <munit:behavior>
+            <munit-tools:mock-when processor="os:retrieve">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Read watermark']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#['2026-09-14T11:02:43.000Z']"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="startup-watermark-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[payload]" expected="#['2026-09-14T11:02:43.000Z']" message="Payload should contain the persisted watermark timestamp"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 3: Watermark store retrieval error path -->
+    <munit:test name="startup-watermark-error-test" description="Verifies startup flow error handling when store retrieval fails">
+        <munit:behavior>
+            <munit-tools:mock-when processor="os:retrieve">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Read watermark']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="OS:STORE_NOT_AVAILABLE"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <try>
+                <flow-ref name="startup-watermark-flow"/>
+                <error-handler>
+                    <on-error-continue type="OS:STORE_NOT_AVAILABLE" logException="false">
+                        <set-variable variableName="errorHandled" value="#[true]"/>
+                    </on-error-continue>
+                </error-handler>
+            </try>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.errorHandled]" expected="#[true]" message="Store error should be caught"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

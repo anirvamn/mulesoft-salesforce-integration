@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd ">
+<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit" xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:salesforce="http://www.mulesoft.org/schema/mule/salesforce" xmlns:vm="http://www.mulesoft.org/schema/mule/vm" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd http://www.mulesoft.org/schema/mule/salesforce http://www.mulesoft.org/schema/mule/salesforce/current/mule-salesforce.xsd http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd">
     <http:listener-config name="order-api-httpListenerConfig">
         <http:listener-connection host="0.0.0.0" port="8081" />
     </http:listener-config>
     <apikit:config name="order-api-config" api="order-api.raml" outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus" />
+    <api-gateway:autodiscovery apiId="${api.id}" doc:name="API Autodiscovery" doc:id="autodiscovery-order-api" flowRef="order-api-main" ignoreBasePath="true" />
 
     <error-handler name="Global_Error_Handler">
 
@@ -180,6 +181,75 @@ output application/json
                     </ee:variables>
                 </ee:transform>
             </on-error-propagate>
+        </error-handler>
+    </flow>
+
+    <flow name="monitoring-health-flow">
+        <http:listener config-ref="order-api-httpListenerConfig" path="/health">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <db:select doc:name="Query health and exceptions" config-ref="Database_Config">
+            <db:sql><![CDATA[SELECT 
+                (SELECT COUNT(*) FROM order_exception WHERE raised_at >= NOW() - INTERVAL '24 HOURS') AS exceptions_24h,
+                (SELECT COUNT(*) FROM sales_order WHERE order_status = 'FAILED') AS failed_orders,
+                (SELECT COUNT(*) FROM sales_order WHERE email_status = 'PENDING_RETRY') AS pending_emails]]></db:sql>
+        </db:select>
+        <ee:transform doc:name="Build health response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var dbStats = payload[0] default {}
+var exCount = (dbStats.exceptions_24h default 0) as Number
+var failCount = (dbStats.failed_orders default 0) as Number
+var pendingCount = (dbStats.pending_emails default 0) as Number
+var hasFailures = exCount > 0 or failCount > 0
+---
+{
+    status: if (hasFailures) "WARNING" else "UP",
+    service: "sf-listener",
+    timestamp: now(),
+    monitoring: {
+        database: {
+            status: "CONNECTED",
+            recentExceptions24h: exCount,
+            failedOrders: failCount,
+            pendingEmailRetries: pendingCount
+        },
+        dlq: {
+            queueName: "orders-dlq",
+            queueType: "PERSISTENT_VM_QUEUE",
+            monitoringNote: "DLQ queue depth monitored via Anypoint Runtime Manager / CloudHub alert"
+        }
+    }
+}]]></ee:set-payload>
+            </ee:message>
+            <ee:variables>
+                <ee:set-variable variableName="httpStatus">200</ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <error-handler>
+            <on-error-continue type="ANY" enableNotifications="false" logException="true">
+                <set-variable variableName="httpStatus" value="#[503]" />
+                <ee:transform doc:name="Build 503 response">
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    status: "DEGRADED",
+    service: "sf-listener",
+    timestamp: now(),
+    error: error.description default "Database connectivity or monitoring source unavailable"
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+            </on-error-continue>
         </error-handler>
     </flow>
 

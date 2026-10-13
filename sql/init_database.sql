@@ -78,5 +78,29 @@ CREATE INDEX IF NOT EXISTS idx_sales_order_line_order ON sales_order_line (order
 CREATE INDEX IF NOT EXISTS idx_order_exception_opp ON order_exception (opportunity_id);
 CREATE INDEX IF NOT EXISTS idx_order_exception_corr ON order_exception (correlation_id);
 
+-- 6. Operational Monitoring Views
+CREATE OR REPLACE VIEW vw_order_exceptions_alert AS
+SELECT 
+    error_code,
+    COUNT(*) AS total_exceptions,
+    COUNT(*) FILTER (WHERE raised_at >= NOW() - INTERVAL '24 HOURS') AS last_24h_exceptions,
+    COUNT(*) FILTER (WHERE sf_task_id IS NULL OR sf_task_id = '') AS unassigned_tasks,
+    MAX(raised_at) AS latest_occurrence
+FROM order_exception
+GROUP BY error_code;
+
+CREATE OR REPLACE VIEW vw_failed_orders_summary AS
+SELECT 
+    order_status,
+    sf_update_status,
+    email_status,
+    COUNT(*) AS order_count,
+    MAX(created_at) AS latest_order
+FROM sales_order
+WHERE order_status = 'FAILED' 
+   OR email_status = 'PENDING_RETRY' 
+   OR sf_update_status = 'FAILED'
+GROUP BY order_status, sf_update_status, email_status;
+
 -- Verification Query
 SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';

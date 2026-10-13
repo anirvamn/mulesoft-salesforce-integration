@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <munit:config name="monitoring-health-test-suite"/>
+
+    <!-- Test 1: Normal condition - 0 exceptions, 0 failures -> UP (HTTP 200) -->
+    <munit:test name="monitoring-health-up-test" description="Verifies health check when services and database are healthy">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query health and exceptions']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{
+                        exceptions_24h: 0,
+                        failed_orders: 0,
+                        pending_emails: 0
+                    }]]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="monitoring-health-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[200]" message="HTTP status should be 200"/>
+            <munit-tools:assert-equals actual="#[payload.status]" expected="#['UP']" message="Health status should be UP"/>
+            <munit-tools:assert-equals actual="#[payload.monitoring.database.recentExceptions24h]" expected="#[0]" message="Exceptions count should be 0"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 2: Detected failures - exceptions present -> WARNING (HTTP 200) -->
+    <munit:test name="monitoring-health-warning-test" description="Verifies health check when failed orders or exceptions exist">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query health and exceptions']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{
+                        exceptions_24h: 3,
+                        failed_orders: 1,
+                        pending_emails: 2
+                    }]]"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="monitoring-health-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[200]" message="HTTP status should be 200"/>
+            <munit-tools:assert-equals actual="#[payload.status]" expected="#['WARNING']" message="Health status should be WARNING"/>
+            <munit-tools:assert-equals actual="#[payload.monitoring.database.recentExceptions24h]" expected="#[3]" message="Exceptions count should be 3"/>
+            <munit-tools:assert-equals actual="#[payload.monitoring.database.failedOrders]" expected="#[1]" message="Failed orders count should be 1"/>
+        </munit:validation>
+    </munit:test>
+
+    <!-- Test 3: Monitoring source error - DB connectivity failure -> DEGRADED (HTTP 503) -->
+    <munit:test name="monitoring-health-db-error-test" description="Verifies health check error handling when database is down">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="#['Query health and exceptions']"/>
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="DB:CONNECTIVITY"/>
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="monitoring-health-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-equals actual="#[vars.httpStatus]" expected="#[503]" message="HTTP status should be 503"/>
+            <munit-tools:assert-equals actual="#[payload.status]" expected="#['DEGRADED']" message="Health status should be DEGRADED"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

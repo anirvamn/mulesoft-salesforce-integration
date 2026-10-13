@@ -39,7 +39,7 @@ http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/sc
     </vm:config>
 
     <http:request-config name="Order_System_API_Config" doc:name="Order System API Config">
-        <http:request-connection host="${orders.api.host}" port="${orders.api.port}" />
+        <http:request-connection protocol="${orders.api.protocol}" host="${orders.api.host}" port="${orders.api.port}" />
     </http:request-config>
 
     <db:config name="Database_Config" doc:name="Database Config">
